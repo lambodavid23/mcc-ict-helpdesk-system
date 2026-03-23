@@ -81,7 +81,7 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
 </head>
 <body>
     <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle">☰</button>
+    <button class="mobile-menu-toggle"><?php echo getLucideIcon('menu', 20); ?></button>
 
     <!-- Sidebar -->
     <div class="sidebar">
@@ -95,11 +95,11 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
             <?php $menu = getNavigationMenu('admin'); ?>
             <?php foreach ($menu as $item): ?>
                 <a href="<?php echo $item['url']; ?>" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == basename($item['url']) ? 'active' : ''; ?>">
-                    <?php echo $item['icon']; ?> <?php echo $item['title']; ?>
+                    <?php echo getLucideIcon($item['icon'], 16); ?> <?php echo $item['title']; ?>
                 </a>
             <?php endforeach; ?>
             <a href="../auth/logout.php" class="nav-item" style="margin-top: auto; border-top: 1px solid #334155;">
-                🚪 Logout
+                <?php echo getLucideIcon('log-out', 16); ?> Logout
             </a>
         </nav>
     </div>

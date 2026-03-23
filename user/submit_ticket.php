@@ -114,7 +114,7 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
 </head>
 <body>
     <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle">☰</button>
+    <button class="mobile-menu-toggle"><?php echo getLucideIcon('menu', 20); ?></button>
 
     <!-- Sidebar -->
     <div class="sidebar">
@@ -128,11 +128,11 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
             <?php $menu = getNavigationMenu('user'); ?>
             <?php foreach ($menu as $item): ?>
                 <a href="<?php echo $item['url']; ?>" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == basename($item['url']) ? 'active' : ''; ?>">
-                    <?php echo $item['icon']; ?> <?php echo $item['title']; ?>
+                    <?php echo getLucideIcon($item['icon'], 16); ?> <?php echo $item['title']; ?>
                 </a>
             <?php endforeach; ?>
             <a href="../auth/logout.php" class="nav-item" style="margin-top: auto; border-top: 1px solid #334155;">
-                🚪 Logout
+                <?php echo getLucideIcon('log-out', 16); ?> Logout
             </a>
         </nav>
     </div>
@@ -215,14 +215,14 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                 <!-- Knowledge Base Suggestions -->
                 <div id="knowledgeSuggestions" style="display: none;">
                     <div class="alert alert-info">
-                        <strong>💡 Suggested Solutions from Knowledge Base:</strong>
+                        <strong><?php echo getLucideIcon('lightbulb', 16); ?> Suggested Solutions from Knowledge Base:</strong>
                         <div id="suggestionsList" style="margin-top: 0.5rem;"></div>
                     </div>
                 </div>
 
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
                     <div style="background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155;">
-                        <h4 style="margin-bottom: 0.5rem; color: #3b82f6;">📋 Your Information</h4>
+                        <h4 style="margin-bottom: 0.5rem; color: #3b82f6;"><?php echo getLucideIcon('clipboard-list', 16); ?> Your Information</h4>
                         <div style="font-size: 0.875rem; color: #94a3b8;">
                             <strong>Name:</strong> <?php echo htmlspecialchars($_SESSION['user_name']); ?><br>
                             <strong>Department:</strong> <?php echo htmlspecialchars($_SESSION['user_department']); ?><br>
@@ -230,7 +230,7 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                         </div>
                     </div>
                     <div style="background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155;">
-                        <h4 style="margin-bottom: 0.5rem; color: #10b981;">⚡ Quick Tips</h4>
+                        <h4 style="margin-bottom: 0.5rem; color: #10b981;"><?php echo getLucideIcon('zap', 16); ?> Quick Tips</h4>
                         <ul style="font-size: 0.875rem; color: #94a3b8; margin: 0; padding-left: 1.5rem;">
                             <li>Be specific about your issue</li>
                             <li>Include error messages</li>

@@ -75,7 +75,7 @@ logActivity('VIEW_TECH_DASHBOARD', 'Technician viewed dashboard');
 </head>
 <body>
     <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle">☰</button>
+    <button class="mobile-menu-toggle"><?php echo getLucideIcon('menu', 20); ?></button>
 
     <!-- Sidebar -->
     <div class="sidebar">
@@ -89,11 +89,11 @@ logActivity('VIEW_TECH_DASHBOARD', 'Technician viewed dashboard');
             <?php $menu = getNavigationMenu('technician'); ?>
             <?php foreach ($menu as $item): ?>
                 <a href="<?php echo $item['url']; ?>" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == basename($item['url']) ? 'active' : ''; ?>">
-                    <?php echo $item['icon']; ?> <?php echo $item['title']; ?>
+                    <?php echo getLucideIcon($item['icon'], 16); ?> <?php echo $item['title']; ?>
                 </a>
             <?php endforeach; ?>
             <a href="../auth/logout.php" class="nav-item" style="margin-top: auto; border-top: 1px solid #334155;">
-                🚪 Logout
+                <?php echo getLucideIcon('log-out', 16); ?> Logout
             </a>
         </nav>
     </div>
@@ -230,13 +230,13 @@ logActivity('VIEW_TECH_DASHBOARD', 'Technician viewed dashboard');
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
                 <a href="my_tickets.php" class="btn btn-primary" style="justify-content: center;">
-                    📋 View All Tickets
+                    <?php echo getLucideIcon('clipboard-list', 16); ?> View All Tickets
                 </a>
                 <a href="update_ticket.php" class="btn btn-secondary" style="justify-content: center;">
-                    ✏️ Update Ticket Status
+                    <?php echo getLucideIcon('edit', 16); ?> Update Ticket Status
                 </a>
                 <a href="../system/knowledge_base.php" class="btn btn-secondary" style="justify-content: center;">
-                    📚 Knowledge Base
+                    <?php echo getLucideIcon('book-open', 16); ?> Knowledge Base
                 </a>
             </div>
         </div>
