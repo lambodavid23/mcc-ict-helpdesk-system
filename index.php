@@ -21,7 +21,7 @@ switch ($_SESSION['user_role']) {
         header('Location: technician/dashboard.php');
         break;
     case 'user':
-        header('Location: user/submit_ticket.php');
+        header('Location: user/dashboard.php');
         break;
     default:
         header('Location: auth/login.php');

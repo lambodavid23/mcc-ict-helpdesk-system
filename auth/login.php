@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         header('Location: ../technician/dashboard.php');
                         break;
                     case 'user':
-                        header('Location: ../user/submit_ticket.php');
+                        header('Location: ../user/dashboard.php');
                         break;
                     default:
                         header('Location: ../index.php');

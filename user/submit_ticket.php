@@ -1,9 +1,4 @@
 <?php
-/**
- * Submit Ticket
- * Smart ICT Helpdesk System - Mutare City Council
- */
-
 require_once '../config/auth_helper.php';
 require_once '../config/database.php';
 
@@ -14,7 +9,6 @@ $conn = $database->getConnection();
 
 $success = '';
 $error = '';
-$knowledge_suggestions = [];
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $title = trim($_POST['title']);
@@ -22,7 +16,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $category = $_POST['category'];
     $priority = $_POST['priority'];
     
-    // Validation
     if (empty($title)) {
         $error = 'Ticket title is required';
     } elseif (empty($description)) {
@@ -30,24 +23,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } elseif (empty($category)) {
         $error = 'Category is required';
     } else {
-        // Auto-assign priority based on category or user selection
         if (empty($priority)) {
             switch ($category) {
-                case 'network':
-                    $priority = 'high';
-                    break;
-                case 'login':
-                    $priority = 'medium';
-                    break;
-                case 'hardware':
-                    $priority = 'low';
-                    break;
-                default:
-                    $priority = 'medium';
+                case 'network': $priority = 'high'; break;
+                case 'login': $priority = 'medium'; break;
+                case 'hardware': $priority = 'low'; break;
+                default: $priority = 'medium';
             }
         }
         
-        // Insert ticket
         $title = $conn->real_escape_string($title);
         $description = $conn->real_escape_string($description);
         $category = $conn->real_escape_string($category);
@@ -61,42 +45,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($conn->query($insert_query)) {
             $ticket_id = $conn->getLastId();
             
-            // Auto-assign technician
             require_once '../system/auto_assign.php';
             autoAssignTechnician($ticket_id, $category);
             
             $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id . '. A technician will be assigned shortly.';
             logActivity('SUBMIT_TICKET', "Submitted ticket: $title");
-            
-            // Clear form
             $_POST = [];
         } else {
             $error = 'Failed to submit ticket. Please try again.';
-        }
-    }
-}
-
-// Search knowledge base for suggestions if description is provided
-if (isset($_POST['description']) && !empty(trim($_POST['description']))) {
-    $description = trim($_POST['description']);
-    $keywords = preg_split('/[\s,\.!?]+/', strtolower($description));
-    $keywords = array_filter($keywords, function($keyword) {
-        return strlen($keyword) > 3;
-    });
-    
-    if (!empty($keywords)) {
-        $keyword_conditions = [];
-        foreach ($keywords as $keyword) {
-            $keyword_conditions[] = "issue_keyword LIKE '%" . $conn->real_escape_string($keyword) . "%'";
-        }
-        
-        $kb_query = "SELECT * FROM knowledge_base WHERE " . implode(' OR ', $keyword_conditions) . " LIMIT 5";
-        $kb_result = $conn->query($kb_query);
-        
-        if ($kb_result && $kb_result->num_rows > 0) {
-            while ($row = $kb_result->fetch_assoc()) {
-                $knowledge_suggestions[] = $row;
-            }
         }
     }
 }
@@ -110,258 +66,436 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Submit Ticket - MCC ICT Helpdesk</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Space Grotesk', sans-serif; }
+        body { background: #050507; }
+        .grid-bg {
+            background-image: 
+                linear-gradient(rgba(26, 26, 46, 0.3) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(26, 26, 46, 0.3) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        .glow-text { text-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
+        .cyber-card {
+            background: rgba(10, 10, 15, 0.9);
+            border: 1px solid #1a1a2e;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        .cyber-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff88, transparent);
+            opacity: 0.5;
+        }
+        .cyber-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            padding-left: 2.75rem;
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+        }
+        .cyber-input:focus {
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.1);
+        }
+        .cyber-input::placeholder {
+            color: #444;
+        }
+        .cyber-select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            padding-left: 2.75rem;
+            padding-right: 2.5rem;
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            appearance: none;
+            cursor: pointer;
+        }
+        .cyber-select:focus {
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.1);
+        }
+        .cyber-select option {
+            background: #0a0a0f;
+            color: #e0e0e0;
+        }
+        .cyber-textarea {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            resize: vertical;
+            min-height: 120px;
+        }
+        .cyber-textarea:focus {
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.1);
+        }
+        .cyber-textarea::placeholder {
+            color: #444;
+        }
+        .cyber-btn {
+            background: linear-gradient(135deg, #00ff88, #00cc6a);
+            color: #050507;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            cursor: pointer;
+        }
+        .cyber-btn:hover {
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+            transform: translateY(-1px);
+        }
+        .cyber-btn-secondary {
+            background: transparent;
+            border: 1px solid #1a1a2e;
+            color: #666;
+        }
+        .cyber-btn-secondary:hover {
+            border-color: #00ff88;
+            color: #00ff88;
+            box-shadow: none;
+        }
+        .cyber-btn-danger {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .cyber-btn-danger:hover {
+            background: rgba(239, 68, 68, 0.2);
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+        }
+        .cyber-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.5rem;
+        }
+        .cyber-label span {
+            color: #ef4444;
+        }
+        .input-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #00ff88;
+            pointer-events: none;
+        }
+        .select-icon {
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #444;
+            pointer-events: none;
+        }
+        .alert-success {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            color: #00ff88;
+            font-size: 0.85rem;
+        }
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            color: #ef4444;
+            font-size: 0.85rem;
+        }
+        .info-box {
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .info-box h4 {
+            color: #00ff88;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+        .info-box p, .info-box li {
+            color: #888;
+            font-size: 0.8rem;
+            line-height: 1.6;
+        }
+        .info-box ul {
+            margin: 0;
+            padding-left: 1.25rem;
+        }
+        @keyframes pulse-green {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(0, 255, 136, 0); }
+        }
+        .pulse-indicator {
+            width: 8px;
+            height: 8px;
+            background: #00ff88;
+            border-radius: 50%;
+            animation: pulse-green 2s infinite;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: #666;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        .sidebar-item:hover, .sidebar-item.active {
+            background: rgba(0, 255, 136, 0.1);
+            color: #00ff88;
+        }
+        .sidebar-item.active {
+            border-left: 2px solid #00ff88;
+        }
+    </style>
 </head>
-<body>
-    <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle"><?php echo getLucideIcon('menu', 20); ?></button>
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="sidebar-header">
-            <div class="logo">
-                <img src="../assets/images/mutarelogo.png" alt="MCC Logo">
-                <div class="logo-text">MCC Helpdesk</div>
+<body class="min-h-screen grid-bg">
+    <!-- Scan Line -->
+    <div class="fixed top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[#00ff88]/20 to-transparent animate-[scan_8s_linear_infinite] pointer-events-none z-50" style="animation: scan 8s linear infinite;"></div>
+    
+    <div class="flex min-h-screen">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-[#0a0a0f]/95 border-r border-[#1a1a2e] p-4 flex flex-col">
+            <!-- Logo -->
+            <div class="flex items-center gap-3 mb-6 pb-4 border-b border-[#1a1a2e]">
+                <img src="../assets/images/mutarelogo.png" alt="MCC" class="w-10 h-10">
+                <div>
+                    <span class="text-sm font-bold text-white">MCC ICT</span>
+                    <p class="text-[10px] text-[#00ff88] uppercase tracking-wider">Helpdesk</p>
+                </div>
             </div>
-        </div>
-        <nav class="nav-menu">
-            <?php $menu = getNavigationMenu('user'); ?>
-            <?php foreach ($menu as $item): ?>
-                <a href="<?php echo $item['url']; ?>" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == basename($item['url']) ? 'active' : ''; ?>">
-                    <?php echo getLucideIcon($item['icon'], 16); ?> <?php echo $item['title']; ?>
+            
+            <!-- Navigation -->
+            <nav class="flex-1 space-y-1">
+                <a href="dashboard.php" class="sidebar-item">
+                    <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                    Dashboard
                 </a>
-            <?php endforeach; ?>
-            <a href="../auth/logout.php" class="nav-item" style="margin-top: auto; border-top: 1px solid #334155;">
-                <?php echo getLucideIcon('log-out', 16); ?> Logout
-            </a>
-        </nav>
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-content">
-        <!-- Header -->
-        <div class="header">
-            <div class="header-title">Submit New Ticket</div>
-            <div class="user-info">
-                <span>Welcome, <?php echo htmlspecialchars($_SESSION['user_name']); ?></span>
-                <div class="user-avatar"><?php echo strtoupper(substr($_SESSION['user_name'], 0, 1)); ?></div>
+                <a href="submit_ticket.php" class="sidebar-item active">
+                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    New Ticket
+                </a>
+                <a href="my_requests.php" class="sidebar-item">
+                    <i data-lucide="ticket" class="w-4 h-4"></i>
+                    My Tickets
+                </a>
+            </nav>
+            
+            <!-- User Info -->
+            <div class="pt-4 border-t border-[#1a1a2e]">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-9 h-9 rounded-lg bg-[#00ff88]/20 border border-[#00ff88]/30 flex items-center justify-center text-[#00ff88] font-bold text-sm">
+                        <?php echo strtoupper(substr($_SESSION['user_name'], 0, 1)); ?>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-white"><?php echo htmlspecialchars($_SESSION['user_name']); ?></p>
+                        <p class="text-[10px] text-[#666]"><?php echo htmlspecialchars($_SESSION['user_department']); ?></p>
+                    </div>
+                </div>
+                <a href="../auth/logout.php" class="flex items-center gap-2 text-[#666] hover:text-[#ef4444] text-xs transition-colors">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
+                    Logout
+                </a>
             </div>
-        </div>
-
-        <?php echo displaySuccess(); ?>
-        <?php echo displayError(); ?>
+        </aside>
         
-        <?php if ($success): ?>
-            <div class="alert alert-success fade-in">
-                <?php echo $success; ?>
-                <div style="margin-top: 1rem;">
-                    <a href="my_requests.php" class="btn btn-primary">View My Tickets</a>
-                    <a href="submit_ticket.php" class="btn btn-secondary">Submit Another Ticket</a>
+        <!-- Main Content -->
+        <main class="flex-1 p-6">
+            <!-- Header -->
+            <header class="flex items-center justify-between mb-6">
+                <div>
+                    <h1 class="text-xl font-bold text-white glow-text">Submit New Ticket</h1>
+                    <p class="text-xs text-[#666] mt-0.5">Create a support request</p>
                 </div>
-            </div>
-        <?php endif; ?>
-        
-        <?php if ($error): ?>
-            <div class="alert alert-error fade-in"><?php echo $error; ?></div>
-        <?php endif; ?>
-
-        <?php if (empty($success)): ?>
-        <!-- Ticket Submission Form -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">Create New Support Ticket</h3>
-            </div>
-            <form method="POST" action="" id="ticketForm" onsubmit="return validateForm('ticketForm')">
-                <div class="form-group">
-                    <label for="title" class="form-label">Ticket Title *</label>
-                    <input type="text" id="title" name="title" class="form-input" 
-                           placeholder="Brief description of your issue" required
-                           value="<?php echo isset($_POST['title']) ? htmlspecialchars($_POST['title']) : ''; ?>">
+                <div class="flex items-center gap-2 text-xs text-[#666]">
+                    <div class="pulse-indicator"></div>
+                    <span>System Online</span>
                 </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div class="form-group">
-                        <label for="category" class="form-label">Category *</label>
-                        <select id="category" name="category" class="form-select" required onchange="updatePriority()">
-                            <option value="">Select Category</option>
-                            <option value="network" <?php echo (isset($_POST['category']) && $_POST['category'] == 'network') ? 'selected' : ''; ?>>Network Issues</option>
-                            <option value="hardware" <?php echo (isset($_POST['category']) && $_POST['category'] == 'hardware') ? 'selected' : ''; ?>>Hardware Problems</option>
-                            <option value="software" <?php echo (isset($_POST['category']) && $_POST['category'] == 'software') ? 'selected' : ''; ?>>Software Issues</option>
-                            <option value="login" <?php echo (isset($_POST['category']) && $_POST['category'] == 'login') ? 'selected' : ''; ?>>Login/Account Issues</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="priority" class="form-label">Priority</label>
-                        <select id="priority" name="priority" class="form-select">
-                            <option value="">Auto-assign (Recommended)</option>
-                            <option value="high" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'high') ? 'selected' : ''; ?>>High - Server/Network Outage</option>
-                            <option value="medium" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'medium') ? 'selected' : ''; ?>>Medium - Account/Login Issues</option>
-                            <option value="low" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'low') ? 'selected' : ''; ?>>Low - Printer/Minor Issues</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="description" class="form-label">Detailed Description *</label>
-                    <textarea id="description" name="description" class="form-textarea" rows="6" 
-                              placeholder="Please provide as much detail as possible about your issue..." required
-                              onkeyup="searchKnowledgeBase(this.value)"><?php echo isset($_POST['description']) ? htmlspecialchars($_POST['description']) : ''; ?></textarea>
-                    <div style="font-size: 0.875rem; color: #94a3b8; margin-top: 0.25rem;">
-                        Include any error messages, steps to reproduce the issue, and what you've already tried.
-                    </div>
-                </div>
-
-                <!-- Knowledge Base Suggestions -->
-                <div id="knowledgeSuggestions" style="display: none;">
-                    <div class="alert alert-info">
-                        <strong><?php echo getLucideIcon('lightbulb', 16); ?> Suggested Solutions from Knowledge Base:</strong>
-                        <div id="suggestionsList" style="margin-top: 0.5rem;"></div>
-                    </div>
-                </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
-                    <div style="background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155;">
-                        <h4 style="margin-bottom: 0.5rem; color: #3b82f6;"><?php echo getLucideIcon('clipboard-list', 16); ?> Your Information</h4>
-                        <div style="font-size: 0.875rem; color: #94a3b8;">
-                            <strong>Name:</strong> <?php echo htmlspecialchars($_SESSION['user_name']); ?><br>
-                            <strong>Department:</strong> <?php echo htmlspecialchars($_SESSION['user_department']); ?><br>
-                            <strong>Email:</strong> <?php echo htmlspecialchars($_SESSION['user_email']); ?>
+            </header>
+            
+            <?php if ($success): ?>
+                <div class="alert-success mb-6 flex items-center gap-3">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i>
+                    <div>
+                        <p class="font-semibold"><?php echo $success; ?></p>
+                        <div class="flex gap-3 mt-3">
+                            <a href="my_requests.php" class="cyber-btn">
+                                <i data-lucide="list" class="w-4 h-4"></i>
+                                View My Tickets
+                            </a>
+                            <a href="submit_ticket.php" class="cyber-btn cyber-btn-secondary">
+                                <i data-lucide="plus" class="w-4 h-4"></i>
+                                Submit Another
+                            </a>
                         </div>
                     </div>
-                    <div style="background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155;">
-                        <h4 style="margin-bottom: 0.5rem; color: #10b981;"><?php echo getLucideIcon('zap', 16); ?> Quick Tips</h4>
-                        <ul style="font-size: 0.875rem; color: #94a3b8; margin: 0; padding-left: 1.5rem;">
+                </div>
+            <?php endif; ?>
+            
+            <?php if ($error): ?>
+                <div class="alert-error mb-6 flex items-center gap-3">
+                    <i data-lucide="alert-circle" class="w-5 h-5"></i>
+                    <span><?php echo $error; ?></span>
+                </div>
+            <?php endif; ?>
+            
+            <?php if (empty($success)): ?>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Form -->
+                <div class="lg:col-span-2">
+                    <div class="cyber-card p-6">
+                        <h2 class="text-base font-semibold text-white mb-6">Ticket Details</h2>
+                        
+                        <form method="POST" action="">
+                            <div class="mb-4">
+                                <label class="cyber-label">Ticket Title <span>*</span></label>
+                                <div class="relative">
+                                    <i data-lucide="type" class="input-icon w-4 h-4"></i>
+                                    <input type="text" name="title" required 
+                                        class="cyber-input"
+                                        placeholder="Brief description of your issue"
+                                        value="<?php echo isset($_POST['title']) ? htmlspecialchars($_POST['title']) : ''; ?>">
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label class="cyber-label">Category <span>*</span></label>
+                                    <div class="relative">
+                                        <i data-lucide="folder" class="input-icon w-4 h-4"></i>
+                                        <select name="category" required class="cyber-select" onchange="updatePriority()">
+                                            <option value="">Select Category</option>
+                                            <option value="network" <?php echo (isset($_POST['category']) && $_POST['category'] == 'network') ? 'selected' : ''; ?>>Network Issues</option>
+                                            <option value="hardware" <?php echo (isset($_POST['category']) && $_POST['category'] == 'hardware') ? 'selected' : ''; ?>>Hardware Problems</option>
+                                            <option value="software" <?php echo (isset($_POST['category']) && $_POST['category'] == 'software') ? 'selected' : ''; ?>>Software Issues</option>
+                                            <option value="login" <?php echo (isset($_POST['category']) && $_POST['category'] == 'login') ? 'selected' : ''; ?>>Login/Account Issues</option>
+                                        </select>
+                                        <i data-lucide="chevron-down" class="select-icon w-4 h-4"></i>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="cyber-label">Priority</label>
+                                    <div class="relative">
+                                        <i data-lucide="flag" class="input-icon w-4 h-4"></i>
+                                        <select name="priority" id="priority" class="cyber-select">
+                                            <option value="">Auto-assign</option>
+                                            <option value="high" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'high') ? 'selected' : ''; ?>>High - Server/Network Outage</option>
+                                            <option value="medium" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'medium') ? 'selected' : ''; ?>>Medium - Account Issues</option>
+                                            <option value="low" <?php echo (isset($_POST['priority']) && $_POST['priority'] == 'low') ? 'selected' : ''; ?>>Low - Minor Issues</option>
+                                        </select>
+                                        <i data-lucide="chevron-down" class="select-icon w-4 h-4"></i>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <label class="cyber-label">Detailed Description <span>*</span></label>
+                                <textarea name="description" required 
+                                    class="cyber-textarea"
+                                    placeholder="Please provide as much detail as possible about your issue. Include error messages, steps to reproduce, and what you've already tried."
+                                    onkeyup="searchKnowledgeBase(this.value)"><?php echo isset($_POST['description']) ? htmlspecialchars($_POST['description']) : ''; ?></textarea>
+                                <p class="text-xs text-[#444] mt-2">Tip: Include any error messages, steps to reproduce, and what you've already tried.</p>
+                            </div>
+                            
+                            <div class="flex gap-3">
+                                <button type="submit" class="cyber-btn">
+                                    <i data-lucide="send" class="w-4 h-4"></i>
+                                    Submit Ticket
+                                </button>
+                                <button type="reset" class="cyber-btn cyber-btn-secondary">
+                                    <i data-lucide="x" class="w-4 h-4"></i>
+                                    Clear
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                
+                <!-- Sidebar Info -->
+                <div class="space-y-4">
+                    <div class="info-box">
+                        <h4><i data-lucide="user" class="w-3 h-3 inline mr-1"></i> Your Information</h4>
+                        <p class="mb-2"><strong>Name:</strong> <?php echo htmlspecialchars($_SESSION['user_name']); ?></p>
+                        <p class="mb-2"><strong>Department:</strong> <?php echo htmlspecialchars($_SESSION['user_department']); ?></p>
+                        <p><strong>Email:</strong> <?php echo htmlspecialchars($_SESSION['user_email']); ?></p>
+                    </div>
+                    
+                    <div class="info-box">
+                        <h4><i data-lucide="lightbulb" class="w-3 h-3 inline mr-1"></i> Quick Tips</h4>
+                        <ul>
                             <li>Be specific about your issue</li>
-                            <li>Include error messages</li>
+                            <li>Include any error messages</li>
                             <li>Mention what you've tried</li>
                             <li>High priority for system outages</li>
                         </ul>
                     </div>
                 </div>
-
-                <div style="margin-top: 1.5rem;">
-                    <button type="submit" class="btn btn-primary">Submit Ticket</button>
-                    <button type="reset" class="btn btn-secondary">Clear Form</button>
-                </div>
-            </form>
-        </div>
-        <?php endif; ?>
-
-        <!-- Recent Tickets Summary -->
-        <?php if (empty($success)): ?>
-        <div class="card" style="margin-top: 1.5rem;">
-            <div class="card-header">
-                <h3 class="card-title">Your Recent Tickets</h3>
-                <a href="my_requests.php" class="btn btn-sm btn-secondary">View All</a>
             </div>
-            <div class="table-container">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Title</th>
-                            <th>Status</th>
-                            <th>Priority</th>
-                            <th>Created</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php
-                        $recent_query = "SELECT id, title, status, priority, created_at 
-                                       FROM tickets 
-                                       WHERE created_by = " . $_SESSION['user_id'] . " 
-                                       ORDER BY created_at DESC 
-                                       LIMIT 5";
-                        $recent_result = $conn->query($recent_query);
-                        
-                        if ($recent_result && $recent_result->num_rows > 0):
-                            while ($ticket = $recent_result->fetch_assoc()):
-                        ?>
-                            <tr>
-                                <td>#<?php echo $ticket['id']; ?></td>
-                                <td><?php echo htmlspecialchars($ticket['title']); ?></td>
-                                <td><?php echo getStatusBadge($ticket['status']); ?></td>
-                                <td><?php echo getPriorityBadge($ticket['priority']); ?></td>
-                                <td><?php echo timeAgo($ticket['created_at']); ?></td>
-                            </tr>
-                        <?php 
-                            endwhile; 
-                        else:
-                        ?>
-                            <tr>
-                                <td colspan="5" style="text-align: center;">No tickets submitted yet</td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        <?php endif; ?>
+            <?php endif; ?>
+        </main>
     </div>
-
-    <script src="../assets/js/script.js"></script>
+    
     <script>
-        // Auto-update priority based on category
+        lucide.createIcons();
+        
         function updatePriority() {
-            const category = document.getElementById('category').value;
+            const category = document.querySelector('select[name="category"]').value;
             const priority = document.getElementById('priority');
             
             if (category && !priority.value) {
                 switch (category) {
-                    case 'network':
-                        priority.value = 'high';
-                        break;
-                    case 'login':
-                        priority.value = 'medium';
-                        break;
-                    case 'hardware':
-                        priority.value = 'low';
-                        break;
-                    default:
-                        priority.value = 'medium';
+                    case 'network': priority.value = 'high'; break;
+                    case 'login': priority.value = 'medium'; break;
+                    case 'hardware': priority.value = 'low'; break;
+                    default: priority.value = 'medium';
                 }
             }
         }
-
-        // Search knowledge base
-        function searchKnowledgeBase(description) {
-            if (description.length < 10) {
-                document.getElementById('knowledgeSuggestions').style.display = 'none';
-                return;
-            }
-
-            // Simulate knowledge base search (in real implementation, this would be an AJAX call)
-            const keywords = description.toLowerCase().split(/\s+/);
-            const suggestions = [
-                { keyword: 'password', solution: 'Try resetting your password using the password reset link or contact IT for assistance.' },
-                { keyword: 'network', solution: 'Check your network cable connection and restart your computer. If issues persist, contact the network team.' },
-                { keyword: 'printer', solution: 'Ensure the printer is turned on, connected to the network, and has paper and ink. Try restarting the printer.' },
-                { keyword: 'login', solution: 'Verify your username and password. Check if Caps Lock is on. Try clearing your browser cache.' },
-                { keyword: 'software', solution: 'Try restarting the application. Check if you have the latest version. Reinstall if necessary.' }
-            ];
-
-            const matchedSuggestions = suggestions.filter(s => 
-                keywords.some(keyword => s.keyword.includes(keyword))
-            );
-
-            if (matchedSuggestions.length > 0) {
-                const suggestionsList = document.getElementById('suggestionsList');
-                suggestionsList.innerHTML = matchedSuggestions.map(s => 
-                    `<div style="margin-bottom: 0.5rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-                        ${s.solution}
-                    </div>`
-                ).join('');
-                document.getElementById('knowledgeSuggestions').style.display = 'block';
-            } else {
-                document.getElementById('knowledgeSuggestions').style.display = 'none';
-            }
-        }
-
-        // Initialize
-        document.addEventListener('DOMContentLoaded', function() {
-            updatePriority();
-        });
     </script>
 </body>
 </html>
