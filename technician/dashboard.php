@@ -1,9 +1,4 @@
 <?php
-/**
- * Technician Dashboard
- * Smart ICT Helpdesk System - Mutare City Council
- */
-
 require_once '../config/auth_helper.php';
 require_once '../config/database.php';
 
@@ -12,57 +7,76 @@ requireRole('technician');
 $database = new Database();
 $conn = $database->getConnection();
 
-// Get current technician info
-$technician_query = "SELECT * FROM technicians WHERE name = '" . $conn->real_escape_string($_SESSION['user_name']) . "'";
-$technician = $conn->query($technician_query)->fetch_assoc();
+$user_id = $_SESSION['user_id'];
+
+// Try to find technician by user_id first, then by name
+$technician = $conn->query("SELECT * FROM technicians WHERE user_id = $user_id")->fetch_assoc();
 
 if (!$technician) {
-    setError('Technician profile not found. Please contact administrator.');
-    header('Location: ../index.php');
-    exit();
+    // Fallback: find by name
+    $user_name = $conn->real_escape_string($_SESSION['user_name']);
+    $technician = $conn->query("SELECT * FROM technicians WHERE name = '$user_name' LIMIT 1")->fetch_assoc();
 }
 
-// Get technician statistics
-$stats = [];
-
-// Assigned tickets
-$result = $conn->query("SELECT COUNT(*) as total FROM tickets WHERE assigned_to = " . $technician['id']);
-$stats['assigned_tickets'] = $result->fetch_assoc()['total'];
-
-// Open tickets
-$result = $conn->query("SELECT COUNT(*) as total FROM tickets WHERE assigned_to = " . $technician['id'] . " AND status IN ('open', 'in_progress')");
-$stats['open_tickets'] = $result->fetch_assoc()['total'];
-
-// Resolved tickets
-$result = $conn->query("SELECT COUNT(*) as total FROM tickets WHERE assigned_to = " . $technician['id'] . " AND status = 'resolved'");
-$stats['resolved_tickets'] = $result->fetch_assoc()['total'];
-
-// Average resolution time
-$result = $conn->query("SELECT AVG(fh.time_to_resolve) as avg_time FROM fault_history fh 
-                       JOIN tickets t ON fh.ticket_id = t.id 
-                       WHERE fh.resolved_by = " . $technician['id']);
-$avg_time = $result->fetch_assoc()['avg_time'];
-$stats['avg_resolution_time'] = $avg_time ? round($avg_time, 1) : 0;
-
-// Recent assigned tickets
-$recent_tickets_query = "SELECT t.*, u.name as created_by_name 
-                         FROM tickets t 
-                         LEFT JOIN users u ON t.created_by = u.id 
-                         WHERE t.assigned_to = " . $technician['id'] . " 
-                         ORDER BY t.created_at DESC 
-                         LIMIT 10";
-$recent_tickets = $conn->query($recent_tickets_query);
-
-// Tickets by priority
-$priority_stats = [];
-$result = $conn->query("SELECT priority, COUNT(*) as count FROM tickets 
-                       WHERE assigned_to = " . $technician['id'] . " 
-                       GROUP BY priority");
-while ($row = $result->fetch_assoc()) {
-    $priority_stats[$row['priority']] = $row['count'];
+if (!$technician) {
+    // If still not found, create a minimal record
+    $technician = [
+        'id' => 0,
+        'name' => $_SESSION['user_name'],
+        'specialization' => 'general',
+        'status' => 'available',
+        'current_workload' => 0
+    ];
 }
 
-logActivity('VIEW_TECH_DASHBOARD', 'Technician viewed dashboard');
+$tech_id = $technician['id'];
+
+$tech_id_safe = $tech_id > 0 ? $tech_id : 0;
+
+$stats = [
+    'total' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe")->fetch_assoc()['c'] ?? 0,
+    'open' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe AND status = 'open'")->fetch_assoc()['c'] ?? 0,
+    'in_progress' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe AND status = 'in_progress'")->fetch_assoc()['c'] ?? 0,
+    'resolved' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe AND status = 'resolved'")->fetch_assoc()['c'] ?? 0,
+    'total_resolved' => $conn->query("SELECT COUNT(*) as c FROM fault_history WHERE resolved_by = $tech_id_safe")->fetch_assoc()['c'] ?? 0,
+    'avg_time' => $conn->query("SELECT AVG(time_to_resolve) as avg FROM fault_history WHERE resolved_by = $tech_id_safe")->fetch_assoc()['avg'] ?? 0,
+];
+
+$my_tickets_query = $tech_id > 0 
+    ? "SELECT t.*, u.name as created_by_name 
+       FROM tickets t 
+       LEFT JOIN users u ON t.created_by = u.id 
+       WHERE t.assigned_to = $tech_id 
+       ORDER BY 
+           CASE WHEN t.priority = 'high' THEN 1 
+                WHEN t.priority = 'medium' THEN 2 
+                ELSE 3 END,
+           CASE WHEN t.status = 'in_progress' THEN 1 
+                WHEN t.status = 'open' THEN 2 
+                ELSE 3 END,
+           t.created_at DESC
+       LIMIT 8"
+    : "SELECT t.*, u.name as created_by_name 
+       FROM tickets t 
+       LEFT JOIN users u ON t.created_by = u.id 
+       WHERE 1=0 LIMIT 0";
+$my_tickets = $conn->query($my_tickets_query);
+
+$unassigned_query = "SELECT COUNT(*) as c FROM tickets WHERE assigned_to IS NULL";
+if ($tech_id > 0) {
+    $unassigned_query .= " AND category = '{$technician['specialization']}'";
+}
+$unassigned = $conn->query($unassigned_query)->fetch_assoc()['c'] ?? 0;
+
+$recent_comments = $conn->query("SELECT tc.*, t.title as ticket_title, u.name as user_name 
+                                FROM ticket_comments tc 
+                                JOIN tickets t ON tc.ticket_id = t.id 
+                                LEFT JOIN users u ON tc.user_id = u.id 
+                                WHERE t.assigned_to = $tech_id_safe AND tc.is_internal = 0
+                                ORDER BY tc.created_at DESC 
+                                LIMIT 5");
+
+logActivity('VIEW_TECHNICIAN_DASHBOARD', 'Technician viewed dashboard');
 ?>
 
 <!DOCTYPE html>
@@ -70,178 +84,414 @@ logActivity('VIEW_TECH_DASHBOARD', 'Technician viewed dashboard');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Technician Dashboard - MCC ICT Helpdesk</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
+    <title>Dashboard - MCC ICT Helpdesk</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Space Grotesk', sans-serif; }
+        body { background: #050507; }
+        .grid-bg {
+            background-image: linear-gradient(rgba(26, 26, 46, 0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(26, 26, 46, 0.3) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        .glow-text { text-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
+        .cyber-card {
+            background: rgba(10, 10, 15, 0.9);
+            border: 1px solid #1a1a2e;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        .cyber-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff88, transparent);
+            opacity: 0.5;
+        }
+        .cyber-btn {
+            background: linear-gradient(135deg, #00ff88, #00cc6a);
+            color: #050507;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            cursor: pointer;
+        }
+        .cyber-btn:hover { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
+        .cyber-btn-secondary { background: transparent; border: 1px solid #1a1a2e; color: #666; }
+        .cyber-btn-secondary:hover { border-color: #00ff88; color: #00ff88; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .badge-open { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .badge-in_progress { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .badge-resolved { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+        .badge-high { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .badge-medium { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .badge-low { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.2);
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: #666;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        .sidebar-item:hover, .sidebar-item.active {
+            background: rgba(0, 255, 136, 0.1);
+            color: #00ff88;
+        }
+        .sidebar-item.active { border-left: 2px solid #00ff88; }
+        .ticket-card {
+            padding: 1rem;
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        .ticket-card:hover {
+            border-color: rgba(0, 255, 136, 0.3);
+            background: rgba(0, 255, 136, 0.03);
+        }
+        @keyframes pulse-green {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(0, 255, 136, 0); }
+        }
+        .pulse-indicator {
+            width: 8px;
+            height: 8px;
+            background: #00ff88;
+            border-radius: 50%;
+            animation: pulse-green 2s infinite;
+        }
+        .quick-action {
+            padding: 1rem;
+            background: rgba(15, 15, 21, 0.8);
+            border: 1px solid #1a1a2e;
+            border-radius: 8px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .quick-action:hover {
+            border-color: #00ff88;
+            background: rgba(0, 255, 136, 0.05);
+        }
+        .quick-action:hover .action-icon { color: #00ff88; }
+        .action-icon { color: #666; transition: color 0.3s; }
+    </style>
 </head>
-<body>
-    <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle"><?php echo getLucideIcon('menu', 20); ?></button>
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="sidebar-header">
-            <div class="logo">
-                <img src="../assets/images/mutarelogo.png" alt="MCC Logo">
-                <div class="logo-text">MCC Helpdesk</div>
+<body class="min-h-screen grid-bg">
+    <div class="flex">
+        <!-- Sidebar -->
+        <aside class="fixed top-0 left-0 h-screen w-64 bg-[#0a0a0f]/95 border-r border-[#1a1a2e] p-4 flex flex-col overflow-hidden">
+            <div class="flex items-center gap-3 mb-6 pb-4 border-b border-[#1a1a2e]">
+                <img src="../assets/images/mutarelogo.png" alt="MCC" class="w-10 h-10">
+                <div>
+                    <span class="text-sm font-bold text-white">MCC ICT</span>
+                    <p class="text-[10px] text-[#00ff88] uppercase tracking-wider">Technician</p>
+                </div>
             </div>
-        </div>
-        <nav class="nav-menu">
-            <?php $menu = getNavigationMenu('technician'); ?>
-            <?php foreach ($menu as $item): ?>
-                <a href="<?php echo $item['url']; ?>" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == basename($item['url']) ? 'active' : ''; ?>">
-                    <?php echo getLucideIcon($item['icon'], 16); ?> <?php echo $item['title']; ?>
+            
+            <nav class="flex-1 space-y-1">
+                <a href="dashboard.php" class="sidebar-item active">
+                    <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                    Dashboard
                 </a>
-            <?php endforeach; ?>
-            <a href="../auth/logout.php" class="nav-item" style="margin-top: auto; border-top: 1px solid #334155;">
-                <?php echo getLucideIcon('log-out', 16); ?> Logout
-            </a>
-        </nav>
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-content">
-        <!-- Header -->
-        <div class="header">
-            <div class="header-title">Technician Dashboard</div>
-            <div class="user-info">
-                <span><?php echo htmlspecialchars($_SESSION['user_name']); ?> (<?php echo ucfirst($technician['specialization']); ?>)</span>
-                <div class="user-avatar"><?php echo strtoupper(substr($_SESSION['user_name'], 0, 1)); ?></div>
-            </div>
-        </div>
-
-        <?php echo displaySuccess(); ?>
-        <?php echo displayError(); ?>
-
-        <!-- Technician Status Card -->
-        <div class="card" style="margin-bottom: 1.5rem;">
-            <div class="card-header">
-                <h3 class="card-title">My Status</h3>
-                <span><?php echo getStatusBadge($technician['status']); ?></span>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                <div style="text-align: center;">
-                    <div style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 0.5rem;">Current Workload</div>
-                    <div style="font-size: 2rem; font-weight: 700; color: #f1f5f9;"><?php echo $technician['current_workload']; ?></div>
+                <a href="technician_queue.php" class="sidebar-item">
+                    <i data-lucide="list-checks" class="w-4 h-4"></i>
+                    My Queue
+                </a>
+                <a href="technician_history.php" class="sidebar-item">
+                    <i data-lucide="history" class="w-4 h-4"></i>
+                    History
+                </a>
+            </nav>
+            
+            <div class="pt-4 border-t border-[#1a1a2e]">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-9 h-9 rounded-lg bg-[#00ff88]/20 border border-[#00ff88]/30 flex items-center justify-center text-[#00ff88] font-bold text-sm">
+                        <?php echo strtoupper(substr($_SESSION['user_name'], 0, 1)); ?>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-white"><?php echo htmlspecialchars($_SESSION['user_name']); ?></p>
+                        <p class="text-[10px] text-[#666] capitalize"><?php echo $technician['specialization']; ?></p>
+                    </div>
                 </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 0.5rem;">Specialization</div>
-                    <div style="font-size: 1.25rem; font-weight: 600; color: #3b82f6;"><?php echo ucfirst($technician['specialization']); ?></div>
+                <div class="flex items-center gap-2 mb-2">
+                    <div class="pulse-indicator"></div>
+                    <span class="text-[10px] text-[#00ff88] capitalize"><?php echo $technician['status']; ?></span>
                 </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 0.5rem;">Contact</div>
-                    <div style="font-size: 0.875rem; color: #e2e8f0;">
-                        <?php if ($technician['phone']): ?><?php echo htmlspecialchars($technician['phone']); ?><?php endif; ?>
-                        <?php if ($technician['email']): ?><br><?php echo htmlspecialchars($technician['email']); ?><?php endif; ?>
+                <a href="../auth/logout.php" class="flex items-center gap-2 text-[#666] hover:text-[#ef4444] text-xs transition-colors">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
+                    Logout
+                </a>
+            </div>
+        </aside>
+        
+        <main class="ml-64 flex-1 p-6 h-screen overflow-y-auto">
+            <!-- Header -->
+            <header class="flex items-center justify-between mb-6">
+                <div>
+                    <h1 class="text-xl font-bold text-white glow-text">Welcome back, <?php echo htmlspecialchars($_SESSION['user_name']); ?></h1>
+                    <p class="text-xs text-[#666] mt-0.5">Here's your technician dashboard overview</p>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-[#666]">
+                    <div class="pulse-indicator"></div>
+                    <span>System Online</span>
+                </div>
+            </header>
+            
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="cyber-card p-4">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">Assigned</p>
+                            <p class="text-2xl font-bold text-white"><?php echo $stats['total']; ?></p>
+                        </div>
+                        <div class="stat-icon">
+                            <i data-lucide="ticket" class="w-5 h-5 text-[#00ff88]"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="cyber-card p-4">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">In Progress</p>
+                            <p class="text-2xl font-bold text-[#f59e0b]"><?php echo $stats['in_progress']; ?></p>
+                        </div>
+                        <div class="stat-icon" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.2);">
+                            <i data-lucide="loader" class="w-5 h-5 text-[#f59e0b]"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="cyber-card p-4">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">Resolved (Total)</p>
+                            <p class="text-2xl font-bold text-[#00ff88]"><?php echo $stats['total_resolved']; ?></p>
+                        </div>
+                        <div class="stat-icon">
+                            <i data-lucide="check-circle" class="w-5 h-5 text-[#00ff88]"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="cyber-card p-4">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">Avg Time</p>
+                            <p class="text-2xl font-bold text-white"><?php echo round($stats['avg_time'] ?? 0, 0); ?><span class="text-sm text-[#666] font-normal">min</span></p>
+                        </div>
+                        <div class="stat-icon" style="background: rgba(139, 92, 246, 0.1); border-color: rgba(139, 92, 246, 0.2);">
+                            <i data-lucide="clock" class="w-5 h-5 text-[#8b5cf6]"></i>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Statistics Cards -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value"><?php echo $stats['assigned_tickets']; ?></div>
-                <div class="stat-label">Assigned Tickets</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value"><?php echo $stats['open_tickets']; ?></div>
-                <div class="stat-label">Open Tickets</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value"><?php echo $stats['resolved_tickets']; ?></div>
-                <div class="stat-label">Resolved Tickets</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value"><?php echo $stats['avg_resolution_time']; ?> min</div>
-                <div class="stat-label">Avg Resolution Time</div>
-            </div>
-        </div>
-
-        <!-- Recent Tickets and Priority Stats -->
-        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
-            <!-- Recent Tickets -->
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">My Recent Tickets</h3>
-                    <a href="my_tickets.php" class="btn btn-sm btn-secondary">View All</a>
+            
+            <!-- Quick Actions -->
+            <div class="grid grid-cols-4 gap-4 mb-6">
+                <a href="technician_queue.php" class="quick-action">
+                    <i data-lucide="list" class="w-6 h-6 action-icon mb-2 mx-auto"></i>
+                    <p class="text-sm text-white font-medium">My Queue</p>
+                    <p class="text-[10px] text-[#666]"><?php echo $stats['in_progress'] + $stats['open']; ?> tickets</p>
+                </a>
+                <?php if ($unassigned > 0): ?>
+                <a href="technician_queue.php?filter=unassigned" class="quick-action" style="border-color: rgba(245, 158, 11, 0.3);">
+                    <i data-lucide="inbox" class="w-6 h-6 mb-2 mx-auto" style="color: #f59e0b;"></i>
+                    <p class="text-sm font-medium" style="color: #f59e0b;">Available</p>
+                    <p class="text-[10px] text-[#666]"><?php echo $unassigned; ?> tickets</p>
+                </a>
+                <?php endif; ?>
+                <a href="technician_history.php" class="quick-action">
+                    <i data-lucide="history" class="w-6 h-6 action-icon mb-2 mx-auto"></i>
+                    <p class="text-sm text-white font-medium">History</p>
+                    <p class="text-[10px] text-[#666]">View resolved</p>
+                </a>
+                <div class="quick-action" onclick="window.location.reload()">
+                    <i data-lucide="refresh-cw" class="w-6 h-6 action-icon mb-2 mx-auto"></i>
+                    <p class="text-sm text-white font-medium">Refresh</p>
+                    <p class="text-[10px] text-[#666]">Update status</p>
                 </div>
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Title</th>
-                                <th>Category</th>
-                                <th>Status</th>
-                                <th>Priority</th>
-                                <th>Created</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if ($recent_tickets && $recent_tickets->num_rows > 0): ?>
-                                <?php while ($ticket = $recent_tickets->fetch_assoc()): ?>
-                                    <tr>
-                                        <td>#<?php echo $ticket['id']; ?></td>
-                                        <td><?php echo htmlspecialchars($ticket['title']); ?></td>
-                                        <td><?php echo ucfirst($ticket['category']); ?></td>
-                                        <td><?php echo getStatusBadge($ticket['status']); ?></td>
-                                        <td><?php echo getPriorityBadge($ticket['priority']); ?></td>
-                                        <td><?php echo timeAgo($ticket['created_at']); ?></td>
-                                    </tr>
+            </div>
+            
+            <div class="grid grid-cols-3 gap-6">
+                <!-- My Tickets -->
+                <div class="col-span-2">
+                    <div class="cyber-card p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+                                <i data-lucide="ticket" class="w-4 h-4 text-[#00ff88]"></i>
+                                My Assigned Tickets
+                            </h2>
+                            <a href="technician_queue.php" class="cyber-btn-secondary px-3 py-1 text-xs">
+                                View All
+                            </a>
+                        </div>
+                        
+                        <?php if ($my_tickets && $my_tickets->num_rows > 0): ?>
+                            <div class="space-y-3">
+                                <?php while ($ticket = $my_tickets->fetch_assoc()): ?>
+                                    <div class="ticket-card">
+                                        <div class="flex items-start justify-between mb-2">
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-[#00ff88] font-mono text-sm">#<?php echo $ticket['id']; ?></span>
+                                                <span class="badge badge-<?php echo $ticket['status']; ?>"><?php echo ucfirst(str_replace('_', ' ', $ticket['status'])); ?></span>
+                                                <span class="badge badge-<?php echo $ticket['priority']; ?>"><?php echo ucfirst($ticket['priority']); ?></span>
+                                            </div>
+                                            <span class="text-[10px] text-[#666]"><?php echo timeAgo($ticket['created_at']); ?></span>
+                                        </div>
+                                        <h3 class="text-white font-medium text-sm mb-1"><?php echo htmlspecialchars($ticket['title']); ?></h3>
+                                        <p class="text-xs text-[#666] mb-3">
+                                            <?php echo htmlspecialchars($ticket['created_by_name']); ?> | 
+                                            <span class="capitalize"><?php echo $ticket['category']; ?></span>
+                                        </p>
+                                        <div class="flex items-center gap-2">
+                                            <a href="ticket_detail.php?id=<?php echo $ticket['id']; ?>" class="cyber-btn-secondary px-3 py-1 text-xs">
+                                                <i data-lucide="eye" class="w-3 h-3"></i>
+                                                View
+                                            </a>
+                                            <?php if ($ticket['status'] == 'open'): ?>
+                                                <form method="POST" action="technician_update.php" class="inline">
+                                                    <input type="hidden" name="action" value="update_status">
+                                                    <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
+                                                    <input type="hidden" name="new_status" value="in_progress">
+                                                    <button type="submit" class="cyber-btn px-3 py-1 text-xs">
+                                                        <i data-lucide="play" class="w-3 h-3"></i>
+                                                        Start
+                                                    </button>
+                                                </form>
+                                            <?php elseif ($ticket['status'] == 'in_progress'): ?>
+                                                <form method="POST" action="technician_update.php" class="inline">
+                                                    <input type="hidden" name="action" value="update_status">
+                                                    <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
+                                                    <input type="hidden" name="new_status" value="resolved">
+                                                    <button type="submit" class="cyber-btn px-3 py-1 text-xs">
+                                                        <i data-lucide="check" class="w-3 h-3"></i>
+                                                        Resolve
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                 <?php endwhile; ?>
-                            <?php else: ?>
-                                <tr>
-                                    <td colspan="6" style="text-align: center;">No tickets assigned</td>
-                                </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Priority Statistics -->
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">Tickets by Priority</h3>
-                </div>
-                <div style="padding: 1rem 0;">
-                    <?php if (!empty($priority_stats)): ?>
-                        <?php 
-                        $priorities = ['high' => 'High', 'medium' => 'Medium', 'low' => 'Low'];
-                        foreach ($priorities as $key => $label): 
-                            $count = isset($priority_stats[$key]) ? $priority_stats[$key] : 0;
-                        ?>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding: 0.75rem; background: #0f172a; border-radius: 8px;">
-                                <span style="font-weight: 500;"><?php echo $label; ?></span>
-                                <span style="background: <?php echo $key == 'high' ? '#ef4444' : ($key == 'medium' ? '#fbbf24' : '#10b981'); ?>; color: white; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 600;"><?php echo $count; ?></span>
                             </div>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <p style="text-align: center; color: #94a3b8;">No priority data available</p>
+                        <?php else: ?>
+                            <div class="text-center py-12">
+                                <i data-lucide="inbox" class="w-12 h-12 text-[#333] mx-auto mb-3"></i>
+                                <p class="text-[#666]">No tickets assigned to you</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <!-- Sidebar -->
+                <div class="space-y-6">
+                    <!-- Performance -->
+                    <div class="cyber-card p-4">
+                        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                            <i data-lucide="trending-up" class="w-4 h-4 text-[#00ff88]"></i>
+                            Performance
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-[#666]">Resolved This Month</span>
+                                    <span class="text-[#00ff88]"><?php echo $stats['resolved']; ?></span>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-[#666]">Avg Resolution Time</span>
+                                    <span class="text-white"><?php echo round($stats['avg_time'] ?? 0, 0); ?> min</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-[#666]">Workload</span>
+                                    <span class="text-white"><?php echo $technician['current_workload']; ?>/10</span>
+                                </div>
+                                <div class="h-2 bg-[#0f0f15] rounded-full overflow-hidden">
+                                    <div class="h-full bg-gradient-to-r from-[#00ff88] to-[#00cc6a] rounded-full" style="width: <?php echo min($technician['current_workload'] * 10, 100); ?>%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Recent Activity -->
+                    <?php if ($recent_comments && $recent_comments->num_rows > 0): ?>
+                    <div class="cyber-card p-4">
+                        <h3 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                            <i data-lucide="message-circle" class="w-4 h-4 text-[#00ff88]"></i>
+                            Recent Replies
+                        </h3>
+                        <?php while ($comment = $recent_comments->fetch_assoc()): ?>
+                            <div class="p-3 bg-[#0f0f15] rounded-lg mb-2">
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="text-xs text-[#ccc]"><?php echo htmlspecialchars($comment['user_name']); ?></span>
+                                    <span class="text-[10px] text-[#666]"><?php echo timeAgo($comment['created_at']); ?></span>
+                                </div>
+                                <p class="text-xs text-[#666] line-clamp-2"><?php echo htmlspecialchars($comment['comment']); ?></p>
+                                <a href="ticket_detail.php?id=<?php echo $comment['ticket_id']; ?>" class="text-[10px] text-[#00ff88]">View #<?php echo $comment['ticket_id']; ?></a>
+                            </div>
+                        <?php endwhile; ?>
+                    </div>
                     <?php endif; ?>
+                    
+                    <!-- Specialization Info -->
+                    <div class="cyber-card p-4">
+                        <h3 class="text-sm font-semibold text-white mb-4">Your Specialization</h3>
+                        <div class="flex items-center gap-3">
+                            <div class="w-12 h-12 rounded-lg bg-[#00ff88]/10 border border-[#00ff88]/20 flex items-center justify-center">
+                                <i data-lucide="cpu" class="w-6 h-6 text-[#00ff88]"></i>
+                            </div>
+                            <div>
+                                <p class="text-white font-medium capitalize"><?php echo $technician['specialization']; ?></p>
+                                <p class="text-xs text-[#666]"><?php echo $unassigned; ?> available tickets</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="card" style="margin-top: 1.5rem;">
-            <div class="card-header">
-                <h3 class="card-title">Quick Actions</h3>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                <a href="my_tickets.php" class="btn btn-primary" style="justify-content: center;">
-                    <?php echo getLucideIcon('clipboard-list', 16); ?> View All Tickets
-                </a>
-                <a href="update_ticket.php" class="btn btn-secondary" style="justify-content: center;">
-                    <?php echo getLucideIcon('edit', 16); ?> Update Ticket Status
-                </a>
-                <a href="../system/knowledge_base.php" class="btn btn-secondary" style="justify-content: center;">
-                    <?php echo getLucideIcon('book-open', 16); ?> Knowledge Base
-                </a>
-            </div>
-        </div>
+        </main>
     </div>
-
-    <script src="../assets/js/script.js"></script>
+    
+    <script>
+        lucide.createIcons();
+    </script>
 </body>
 </html>

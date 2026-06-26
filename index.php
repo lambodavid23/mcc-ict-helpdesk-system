@@ -1,6 +1,6 @@
 <?php
 /**
- * Main Entry Point
+
  * Smart ICT Helpdesk System - Mutare City Council
  */
 

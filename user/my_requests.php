@@ -345,6 +345,7 @@ logActivity('VIEW_MY_REQUESTS', 'User viewed their ticket requests');
                                 <th>Priority</th>
                                 <th>Assigned To</th>
                                 <th>Created</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -370,11 +371,17 @@ logActivity('VIEW_MY_REQUESTS', 'User viewed their ticket requests');
                                             <?php echo $ticket['assigned_to_name'] ? htmlspecialchars($ticket['assigned_to_name']) : '<span class="text-[#444]">Pending</span>'; ?>
                                         </td>
                                         <td class="text-[#666] text-xs"><?php echo date('M d, Y', strtotime($ticket['created_at'])); ?></td>
+                                        <td>
+                                            <a href="ticket_detail.php?id=<?php echo $ticket['id']; ?>" class="cyber-btn-secondary px-2 py-1 text-xs">
+                                                <i data-lucide="eye" class="w-3 h-3"></i>
+                                                View
+                                            </a>
+                                        </td>
                                     </tr>
                                 <?php endwhile; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="7" class="text-center text-[#666] py-12">
+                                    <td colspan="8" class="text-center text-[#666] py-12">
                                         <div class="flex flex-col items-center gap-3">
                                             <i data-lucide="inbox" class="w-12 h-12 text-[#333]"></i>
                                             <span class="text-sm">No tickets found</span>

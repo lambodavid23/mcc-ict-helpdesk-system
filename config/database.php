@@ -42,10 +42,5 @@ class Database {
         return $this->conn->insert_id;
     }
 
-    public function __destruct() {
-        if ($this->conn) {
-            $this->conn->close();
-        }
-    }
 }
 ?>

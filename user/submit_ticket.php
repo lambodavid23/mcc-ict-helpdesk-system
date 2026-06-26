@@ -1,14 +1,20 @@
 <?php
 require_once '../config/auth_helper.php';
 require_once '../config/database.php';
+require_once '../config/NotificationService.php';
+require_once '../config/AutoAssignmentService.php';
 
 requireRole('user');
 
 $database = new Database();
 $conn = $database->getConnection();
+$notifications = new NotificationService();
+$auto_assign = new AutoAssignmentService();
 
 $success = '';
 $error = '';
+
+$is_ajax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $title = trim($_POST['title']);
@@ -43,12 +49,57 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                          VALUES ('$title', '$description', '$department', '$category', '$priority', 'open', $created_by)";
         
         if ($conn->query($insert_query)) {
-            $ticket_id = $conn->getLastId();
+            $ticket_id = $database->getLastId();
             
-            require_once '../system/auto_assign.php';
-            autoAssignTechnician($ticket_id, $category);
+            if (!empty($_FILES['attachment']['name'])) {
+                $file = $_FILES['attachment'];
+                $allowed = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'txt', 'zip'];
+                $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                
+                if (in_array($ext, $allowed) && $file['size'] <= 5 * 1024 * 1024) {
+                    $upload_dir = '../uploads/tickets/' . $ticket_id . '/';
+                    if (!is_dir($upload_dir)) {
+                        mkdir($upload_dir, 0755, true);
+                    }
+                    $filename = time() . '_' . basename($file['name']);
+                    $filepath = $upload_dir . $filename;
+                    
+                    if (move_uploaded_file($file['tmp_name'], $filepath)) {
+                        $filename_esc = $conn->real_escape_string($file['name']);
+                        $filepath_esc = $conn->real_escape_string($filepath);
+                        $filesize = $file['size'];
+                        $mime = $conn->real_escape_string($file['type']);
+                        
+                        $stmt = $conn->prepare("INSERT INTO ticket_attachments (ticket_id, uploaded_by, filename, filepath, filesize, mime_type) VALUES (?, ?, ?, ?, ?, ?)");
+                        $stmt->bind_param("iissis", $ticket_id, $created_by, $filename_esc, $filepath_esc, $filesize, $mime);
+                        $stmt->execute();
+                        $stmt->close();
+                    }
+                }
+            }
             
-            $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id . '. A technician will be assigned shortly.';
+            $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id . '. You will receive an email notification when a technician is assigned.';
+            
+            if ($is_ajax) {
+                ignore_user_abort(true);
+                set_time_limit(0);
+                if (ob_get_level()) ob_clean();
+                header('Content-Type: application/json');
+                header('Connection: close');
+                $json = json_encode(['status' => 'success', 'message' => $success, 'ticket_id' => $ticket_id]);
+                header('Content-Length: ' . strlen($json));
+                echo $json;
+                ob_flush();
+                flush();
+                
+                $auto_assign->autoAssignTicket($ticket_id);
+                $notifications->notifyTicketCreated($ticket_id, $created_by);
+                logActivity('SUBMIT_TICKET', "Submitted ticket: $title");
+                exit;
+            }
+            
+            $auto_assign->autoAssignTicket($ticket_id);
+            $notifications->notifyTicketCreated($ticket_id, $created_by);
             logActivity('SUBMIT_TICKET', "Submitted ticket: $title");
             $_POST = [];
         } else {
@@ -291,9 +342,72 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
         .sidebar-item.active {
             border-left: 2px solid #00ff88;
         }
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .toast {
+            padding: 1rem 1.25rem;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            min-width: 320px;
+            max-width: 420px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            transform: translateX(120%);
+            opacity: 0;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+            border: 1px solid transparent;
+        }
+        .toast.show {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        .toast-success {
+            background: rgba(0, 255, 136, 0.12);
+            border-color: rgba(0, 255, 136, 0.35);
+            color: #00ff88;
+        }
+        .toast-error {
+            background: rgba(239, 68, 68, 0.12);
+            border-color: rgba(239, 68, 68, 0.35);
+            color: #ef4444;
+        }
+        .toast-info {
+            background: rgba(59, 130, 246, 0.12);
+            border-color: rgba(59, 130, 246, 0.35);
+            color: #60a5fa;
+        }
+        .toast-close {
+            margin-left: auto;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+            background: none;
+            border: none;
+            color: inherit;
+            padding: 0;
+            display: flex;
+        }
+        .toast-close:hover {
+            opacity: 1;
+        }
+        .toast-icon {
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body class="min-h-screen grid-bg">
+    <div id="toastContainer" class="toast-container"></div>
+    
     <!-- Scan Line -->
     <div class="fixed top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[#00ff88]/20 to-transparent animate-[scan_8s_linear_infinite] pointer-events-none z-50" style="animation: scan 8s linear infinite;"></div>
     
@@ -357,25 +471,6 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                 </div>
             </header>
             
-            <?php if ($success): ?>
-                <div class="alert-success mb-6 flex items-center gap-3">
-                    <i data-lucide="check-circle" class="w-5 h-5"></i>
-                    <div>
-                        <p class="font-semibold"><?php echo $success; ?></p>
-                        <div class="flex gap-3 mt-3">
-                            <a href="my_requests.php" class="cyber-btn">
-                                <i data-lucide="list" class="w-4 h-4"></i>
-                                View My Tickets
-                            </a>
-                            <a href="submit_ticket.php" class="cyber-btn cyber-btn-secondary">
-                                <i data-lucide="plus" class="w-4 h-4"></i>
-                                Submit Another
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            <?php endif; ?>
-            
             <?php if ($error): ?>
                 <div class="alert-error mb-6 flex items-center gap-3">
                     <i data-lucide="alert-circle" class="w-5 h-5"></i>
@@ -383,14 +478,13 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                 </div>
             <?php endif; ?>
             
-            <?php if (empty($success)): ?>
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <!-- Form -->
                 <div class="lg:col-span-2">
                     <div class="cyber-card p-6">
                         <h2 class="text-base font-semibold text-white mb-6">Ticket Details</h2>
                         
-                        <form method="POST" action="">
+                        <form method="POST" action="" enctype="multipart/form-data" id="ticketForm">
                             <div class="mb-4">
                                 <label class="cyber-label">Ticket Title <span>*</span></label>
                                 <div class="relative">
@@ -442,6 +536,12 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                                 <p class="text-xs text-[#444] mt-2">Tip: Include any error messages, steps to reproduce, and what you've already tried.</p>
                             </div>
                             
+                            <div class="mb-4">
+                                <label class="cyber-label">Attachment (Optional)</label>
+                                <input type="file" name="attachment" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.txt,.zip" class="text-sm text-[#ccc] file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#00ff88]/20 file:text-[#00ff88] file:font-semibold file:cursor-pointer hover:file:bg-[#00ff88]/30">
+                                <p class="text-xs text-[#444] mt-1">Max 5MB. Images, PDF, Word, or text files.</p>
+                            </div>
+                            
                             <div class="flex gap-3">
                                 <button type="submit" class="cyber-btn">
                                     <i data-lucide="send" class="w-4 h-4"></i>
@@ -476,7 +576,6 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                     </div>
                 </div>
             </div>
-            <?php endif; ?>
         </main>
     </div>
     
@@ -496,6 +595,65 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                 }
             }
         }
+        
+        function showToast(message, type) {
+            const container = document.getElementById('toastContainer');
+            const icons = { success: 'check-circle', error: 'alert-circle', info: 'info' };
+            
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.innerHTML = '<i data-lucide="' + (icons[type] || 'info') + '" class="w-5 h-5 toast-icon"></i>'
+                + '<span>' + message + '</span>'
+                + '<button class="toast-close" onclick="this.parentElement.remove()"><i data-lucide="x" class="w-4 h-4"></i></button>';
+            
+            container.appendChild(toast);
+            lucide.createIcons({ root: toast });
+            
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 400);
+            }, 5000);
+        }
+        
+        document.getElementById('ticketForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const btn = form.querySelector('button[type="submit"]');
+            const originalHTML = btn.innerHTML;
+            
+            btn.innerHTML = '<svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg> Submitting...';
+            btn.disabled = true;
+            
+            const formData = new FormData(form);
+            
+            fetch('', {
+                method: 'POST',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.status === 'success') {
+                    showToast(data.message, 'success');
+                    form.reset();
+                    lucide.createIcons();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            })
+            .catch(function() {
+                showToast('Network error. Please try again.', 'error');
+            })
+            .finally(function() {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            });
+        });
     </script>
 </body>
 </html>

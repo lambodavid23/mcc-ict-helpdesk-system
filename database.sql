@@ -119,11 +119,11 @@ INSERT INTO technicians (user_id, name, specialization, current_workload, status
 
 -- Insert sample tickets
 INSERT INTO tickets (title, description, department, category, priority, status, created_by, assigned_to) VALUES
-('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 6, 4),
+('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 6, 3),
 ('Printer not working', 'The shared printer in the finance department is not printing documents. It shows offline status.', 'Finance', 'hardware', 'medium', 'open', 6, NULL),
-('Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 7, 2),
+('Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 7, 1),
 ('Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 8, NULL),
-('Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 6, 5),
+('Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 6, 4),
 ('Computer running slow', 'My computer is extremely slow and takes a long time to open applications.', 'HR', 'hardware', 'medium', 'open', 7, NULL);
 
 -- Insert sample ticket assignments
