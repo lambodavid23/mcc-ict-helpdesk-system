@@ -1,0 +1,24 @@
+# Uploaded ticket attachments (user files)
+uploads/
+
+# Composer dependencies
+/vendor/
+composer.lock
+
+# Node
+/node_modules/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Local PHP / backups
+*.tmp
