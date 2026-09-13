@@ -233,6 +233,23 @@ function paginate($total_items, $items_per_page = 10, $current_page = 1) {
 }
 
 /**
+ * Check if user authenticated via GitHub
+ */
+function isGitHubAuth() {
+    return isset($_SESSION['auth_provider']) && $_SESSION['auth_provider'] === 'github';
+}
+
+/**
+ * Get user avatar URL (GitHub avatar or default)
+ */
+function getUserAvatar($size = 40) {
+    if (isGitHubAuth() && isset($_SESSION['user_avatar'])) {
+        return $_SESSION['user_avatar'] . '&s=' . $size;
+    }
+    return null;
+}
+
+/**
  * Get Lucide icon HTML
  */
 function getLucideIcon($iconName, $size = 16, $class = '') {
