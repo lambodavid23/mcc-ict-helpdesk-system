@@ -7,6 +7,16 @@ requireRole('user');
 $database = new Database();
 $conn = $database->getConnection();
 
+$is_pending = isPendingUser();
+$pending_expires_at = null;
+if ($is_pending) {
+    $uid = (int)$_SESSION['user_id'];
+    $exp_result = $conn->query("SELECT pending_expires_at FROM users WHERE id = $uid AND status = 'pending' LIMIT 1");
+    if ($exp_result && $exp_result->num_rows > 0) {
+        $pending_expires_at = $exp_result->fetch_assoc()['pending_expires_at'];
+    }
+}
+
 // Get user stats
 $my_tickets_query = "SELECT COUNT(*) as total FROM tickets WHERE created_by = " . $_SESSION['user_id'];
 $result = $conn->query($my_tickets_query);
@@ -220,10 +230,12 @@ logActivity('VIEW_USER_DASHBOARD', 'User viewed dashboard');
                     <i data-lucide="plus-circle" class="w-4 h-4"></i>
                     New Ticket
                 </a>
+                <?php if (!$is_pending): ?>
                 <a href="my_requests.php" class="sidebar-item">
                     <i data-lucide="ticket" class="w-4 h-4"></i>
                     My Tickets
                 </a>
+                <?php endif; ?>
             </nav>
             
             <!-- User Info -->
@@ -257,6 +269,48 @@ logActivity('VIEW_USER_DASHBOARD', 'User viewed dashboard');
                     <span>System Online</span>
                 </div>
             </header>
+            
+            <?php if ($is_pending && $pending_expires_at): ?>
+            <?php
+                $exp = strtotime($pending_expires_at);
+                $hours_left = max(0, ceil(($exp - time()) / 3600));
+                $days_left = floor($hours_left / 24);
+                $hours_display = $hours_left % 24;
+            ?>
+            <div class="cyber-card p-4 mb-6" style="border-color: rgba(251, 191, 36, 0.35);">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3);">
+                        <i data-lucide="clock" class="w-5 h-5 text-[#fbbf24]"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-white">Temporary Access Active</p>
+                        <p class="text-[11px] text-[#888] mt-0.5">
+                            Your account is pending admin approval. Access expires in
+                            <span class="text-[#fbbf24] font-semibold">
+                                <?php if ($days_left > 0): ?>
+                                    <?php echo $days_left; ?> day<?php echo $days_left != 1 ? 's' : ''; ?>
+                                    <?php if ($hours_display > 0): ?>, <?php echo $hours_display; ?>h<?php endif; ?>
+                                <?php else: ?>
+                                    <?php echo $hours_left; ?> hour<?php echo $hours_left != 1 ? 's' : ''; ?>
+                                <?php endif; ?>
+                            </span>.
+                            You can submit tickets only. File uploads are disabled until your account is approved.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <?php if ($is_pending): ?>
+            <style>
+                .pending-disabled { opacity: 0.4; pointer-events: none; position: relative; }
+                .pending-disabled::after {
+                    content: 'Approval Required'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                    background: rgba(251, 191, 36, 0.2); border: 1px solid rgba(251, 191, 36, 0.4);
+                    color: #fbbf24; padding: 4px 12px; border-radius: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap; pointer-events: auto;
+                }
+            </style>
+            <?php endif; ?>
             
             <!-- Stats Grid -->
             <div class="grid grid-cols-3 gap-4 mb-6">
@@ -308,6 +362,7 @@ logActivity('VIEW_USER_DASHBOARD', 'User viewed dashboard');
                     <span class="text-[10px] text-[#666]">Submit a request</span>
                 </a>
                 
+                <?php if (!$is_pending): ?>
                 <a href="my_requests.php" class="quick-action">
                     <div class="quick-action-icon" style="background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.2);">
                         <i data-lucide="list" class="w-6 h-6 text-[#60a5fa]"></i>
@@ -315,6 +370,7 @@ logActivity('VIEW_USER_DASHBOARD', 'User viewed dashboard');
                     <span class="text-xs font-medium text-white">My Tickets</span>
                     <span class="text-[10px] text-[#666]">View all requests</span>
                 </a>
+                <?php endif; ?>
             </div>
             
             <!-- Recent Tickets -->

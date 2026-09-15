@@ -9,11 +9,20 @@ if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
+restoreRememberedUser();
+
 /**
  * Check if user is logged in
  */
 function isLoggedIn() {
     return isset($_SESSION['user_id']);
+}
+
+/**
+ * Check if current user is a pending user with temporary access
+ */
+function isPendingUser() {
+    return isset($_SESSION['user_status']) && $_SESSION['user_status'] === 'pending';
 }
 
 /**
@@ -59,6 +68,139 @@ function getCurrentUser() {
         ];
     }
     return null;
+}
+
+/**
+ * Restore a login session from a remember-me cookie
+ */
+function restoreRememberedUser() {
+    if (isset($_SESSION['user_id'])) {
+        return;
+    }
+    if (!isset($_COOKIE['remember_token']) || empty($_COOKIE['remember_token'])) {
+        return;
+    }
+    require_once __DIR__ . '/database.php';
+    $database = new Database();
+    $conn = $database->getConnection();
+    if ($conn->connect_error) {
+        return;
+    }
+    $token_escaped = $conn->real_escape_string($_COOKIE['remember_token']);
+    $token_query = "SELECT id, user_type, user_id FROM remember_tokens 
+                    WHERE token = '$token_escaped' AND expires_at > NOW() LIMIT 1";
+    $token_result = $conn->query($token_query);
+    if (!$token_result || $token_result->num_rows == 0) {
+        setcookie('remember_token', '', time() - 3600, '/');
+        return;
+    }
+    $token_row = $token_result->fetch_assoc();
+    $table = $token_row['user_type'] . 's';
+    $status_field = $token_row['user_type'] == 'user' ? ', status, pending_expires_at' : '';
+    $user_query = "SELECT id, name, email, department$status_field FROM $table WHERE id = " . (int)$token_row['user_id'] . " LIMIT 1";
+    $user_result = $conn->query($user_query);
+    if (!$user_result || $user_result->num_rows == 0) {
+        $conn->query("DELETE FROM remember_tokens WHERE id = " . (int)$token_row['id']);
+        setcookie('remember_token', '', time() - 3600, '/');
+        return;
+    }
+    $user = $user_result->fetch_assoc();
+    if ($token_row['user_type'] == 'user' && isset($user['status']) && $user['status'] != 'active') {
+        if ($user['status'] == 'pending' && isset($user['pending_expires_at']) && strtotime($user['pending_expires_at']) >= time()) {
+            $_SESSION['user_status'] = 'pending';
+        } else {
+            if ($user['status'] == 'pending') {
+                $conn->query("UPDATE users SET status = 'rejected' WHERE id = " . (int)$user['id']);
+            }
+            $conn->query("DELETE FROM remember_tokens WHERE id = " . (int)$token_row['id']);
+            setcookie('remember_token', '', time() - 3600, '/');
+            return;
+        }
+    }
+    $_SESSION['user_id'] = $user['id'];
+    $_SESSION['user_name'] = $user['name'];
+    $_SESSION['user_email'] = $user['email'];
+    $_SESSION['user_role'] = $token_row['user_type'];
+    $_SESSION['user_department'] = $user['department'];
+}
+
+/**
+ * Issue a remember-me cookie token for a user
+ */
+function issueRememberToken($role, $userId) {
+    require_once __DIR__ . '/database.php';
+    $database = new Database();
+    $conn = $database->getConnection();
+    if ($conn->connect_error) {
+        return;
+    }
+    $token = bin2hex(random_bytes(32));
+    $expires = date('Y-m-d H:i:s', time() + 30 * 24 * 3600);
+    $role_escaped = $conn->real_escape_string($role);
+    $conn->query("DELETE FROM remember_tokens WHERE user_type = '$role_escaped' AND user_id = " . (int)$userId);
+    $conn->query("INSERT INTO remember_tokens (user_type, user_id, token, expires_at) 
+                  VALUES ('$role_escaped', " . (int)$userId . ", '$token', '$expires')");
+    setcookie('remember_token', $token, time() + 30 * 24 * 3600, '/', '', false, true);
+}
+
+/**
+ * Clear the remember-me cookie and token for a user
+ */
+function destroyRememberToken($role, $userId) {
+    setcookie('remember_token', '', time() - 3600, '/');
+    if ($role !== null && $userId !== null) {
+        require_once __DIR__ . '/database.php';
+        $database = new Database();
+        $conn = $database->getConnection();
+        if (!$conn->connect_error) {
+            $role_escaped = $conn->real_escape_string($role);
+            $conn->query("DELETE FROM remember_tokens WHERE user_type = '$role_escaped' AND user_id = " . (int)$userId);
+        }
+    }
+}
+
+/**
+ * Find a user across all account tables by email
+ */
+function findUserByEmail($email) {
+    require_once __DIR__ . '/database.php';
+    $database = new Database();
+    $conn = $database->getConnection();
+    if ($conn->connect_error) {
+        return null;
+    }
+    $email_escaped = $conn->real_escape_string($email);
+    $tables = ['user' => 'users', 'technician' => 'technicians', 'admin' => 'admins'];
+    foreach ($tables as $type => $table) {
+        $result = $conn->query("SELECT id, name, email, password, department, status FROM $table WHERE email = '$email_escaped' LIMIT 1");
+        if ($result && $result->num_rows == 1) {
+            $row = $result->fetch_assoc();
+            $row['user_type'] = $type;
+            return $row;
+        }
+    }
+    return null;
+}
+
+/**
+ * Update a user's password in the correct account table
+ */
+function updateUserPassword($userType, $userId, $newPassword) {
+    require_once __DIR__ . '/database.php';
+    $database = new Database();
+    $conn = $database->getConnection();
+    if ($conn->connect_error) {
+        return false;
+    }
+    $tables = ['user' => 'users', 'technician' => 'technicians', 'admin' => 'admins'];
+    if (!isset($tables[$userType])) {
+        return false;
+    }
+    $hashed = password_hash($newPassword, PASSWORD_DEFAULT);
+    $uid = (int)$userId;
+    $stmt = $conn->prepare("UPDATE {$tables[$userType]} SET password = ? WHERE id = ?");
+    $stmt->bind_param('si', $hashed, $uid);
+    return $stmt->execute();
 }
 
 /**

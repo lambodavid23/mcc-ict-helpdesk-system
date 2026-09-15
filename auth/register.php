@@ -44,11 +44,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $department_escaped = $conn->real_escape_string($department);
             $hashed_password = password_hash($password, PASSWORD_DEFAULT);
             
-            $insert_query = "INSERT INTO users (name, email, password, department) 
-                           VALUES ('$name_escaped', '$email_escaped', '$hashed_password', '$department_escaped')";
+            $pending_expires = date('Y-m-d H:i:s', time() + 3 * 24 * 3600);
+            $insert_query = "INSERT INTO users (name, email, password, department, status, pending_expires_at) 
+                           VALUES ('$name_escaped', '$email_escaped', '$hashed_password', '$department_escaped', 'pending', '$pending_expires')";
             
             if ($conn->query($insert_query)) {
-                $success = 'Account created. You may now login.';
+                $new_user_id = $conn->insert_id;
+                
+                $admin_result = $conn->query("SELECT id FROM admins");
+                $notif_title = "New registration: $name";
+                $notif_message = "$name ($email) from $department has requested access. Account expires in 3 days if not approved.";
+                $notif_title = $conn->real_escape_string($notif_title);
+                $notif_message = $conn->real_escape_string($notif_message);
+                while ($admin = $admin_result->fetch_assoc()) {
+                    $conn->query("INSERT INTO notifications (user_id, user_type, ticket_id, type, title, message) 
+                                  VALUES ({$admin['id']}, 'admin', NULL, 'account_pending', '$notif_title', '$notif_message')");
+                }
+                
+                $success = 'Account created. You can log in now, but your access expires in 3 days unless an administrator approves your account.';
             } else {
                 $errors[] = 'Registration failed. Try again.';
             }

@@ -67,17 +67,61 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     }
                 }
                 break;
+
+            case 'approve_user':
+                $user_id = (int)$_POST['user_id'];
+                if ($conn->query("UPDATE users SET status = 'active', pending_expires_at = NULL WHERE id = $user_id")) {
+                    $conn->query("UPDATE notifications SET is_read = 1 WHERE type = 'account_pending' AND message LIKE '%" . $user_id . "%'");
+                    $success = 'User approved successfully';
+                    logActivity('APPROVE_USER', "Approved user ID: $user_id");
+                } else {
+                    $error = 'Failed to approve user';
+                }
+                break;
+
+            case 'reject_user':
+                $user_id = (int)$_POST['user_id'];
+                if ($conn->query("UPDATE users SET status = 'rejected', pending_expires_at = NULL WHERE id = $user_id")) {
+                    $conn->query("UPDATE notifications SET is_read = 1 WHERE type = 'account_pending' AND message LIKE '%" . $user_id . "%'");
+                    $success = 'User request rejected';
+                    logActivity('REJECT_USER', "Rejected user ID: $user_id");
+                } else {
+                    $error = 'Failed to reject user';
+                }
+                break;
+
+            case 'suspend_user':
+                $user_id = (int)$_POST['user_id'];
+                if ($conn->query("UPDATE users SET status = 'suspended' WHERE id = $user_id")) {
+                    $success = 'User suspended successfully';
+                    logActivity('SUSPEND_USER', "Suspended user ID: $user_id");
+                } else {
+                    $error = 'Failed to suspend user';
+                }
+                break;
+
+            case 'activate_user':
+                $user_id = (int)$_POST['user_id'];
+                if ($conn->query("UPDATE users SET status = 'active' WHERE id = $user_id")) {
+                    $success = 'User activated successfully';
+                    logActivity('ACTIVATE_USER', "Activated user ID: $user_id");
+                } else {
+                    $error = 'Failed to activate user';
+                }
+                break;
         }
     }
 }
 
-$users_query = "SELECT id, name, email, department, created_at FROM users ORDER BY created_at DESC";
+$users_query = "SELECT id, name, email, department, status, created_at FROM users ORDER BY created_at DESC";
 $users = $conn->query($users_query);
 
 $total_users = $conn->query("SELECT COUNT(*) as total FROM users")->fetch_assoc()['total'];
 $admin_count = $conn->query("SELECT COUNT(*) as total FROM admins")->fetch_assoc()['total'];
 $user_count = $conn->query("SELECT COUNT(*) as total FROM users")->fetch_assoc()['total'];
 $tech_count = $conn->query("SELECT COUNT(*) as total FROM technicians")->fetch_assoc()['total'];
+$pending_count = $conn->query("SELECT COUNT(*) as total FROM users WHERE status = 'pending'")->fetch_assoc()['total'];
+$pending_users = $conn->query("SELECT id, name, email, department, pending_expires_at FROM users WHERE status = 'pending' ORDER BY created_at DESC");
 
 logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
 ?>
@@ -183,6 +227,9 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
         .badge-admin { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
         .badge-tech { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
         .badge-user { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+        .badge-pending { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+        .badge-rejected { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+        .badge-suspended { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
         .stat-icon {
             width: 40px;
             height: 40px;
@@ -325,17 +372,82 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                 </div>
                 <div class="cyber-card p-4">
                     <div class="flex items-center gap-3">
-                        <div class="stat-icon">
-                            <i data-lucide="user" class="w-5 h-5 text-[#00ff88]"></i>
+                        <div class="stat-icon" style="background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.2);">
+                            <i data-lucide="clock" class="w-5 h-5 text-[#fbbf24]"></i>
                         </div>
                         <div>
-                            <p class="text-2xl font-bold text-white"><?php echo $user_count; ?></p>
-                            <p class="text-[10px] text-[#666] uppercase">Users</p>
+                            <p class="text-2xl font-bold text-white"><?php echo $pending_count; ?></p>
+                            <p class="text-[10px] text-[#666] uppercase">Pending Approvals</p>
                         </div>
                     </div>
                 </div>
             </div>
             
+            <!-- Pending Approvals -->
+            <?php if ($pending_users && $pending_users->num_rows > 0): ?>
+            <div class="cyber-card p-4 mb-6" style="border-color: rgba(251, 191, 36, 0.25);">
+                <h2 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                    <i data-lucide="clock" class="w-4 h-4 text-[#fbbf24]"></i>
+                    Pending Approvals (<?php echo $pending_users->num_rows; ?>)
+                </h2>
+                <div class="overflow-x-auto">
+                    <table class="cyber-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Department</th>
+                                <th>Expires</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php while ($p = $pending_users->fetch_assoc()): ?>
+                                <tr>
+                                    <td class="text-[#fbbf24] font-mono">#<?php echo $p['id']; ?></td>
+                                    <td class="text-white font-medium"><?php echo htmlspecialchars($p['name']); ?></td>
+                                    <td class="text-[#ccc]"><?php echo htmlspecialchars($p['email']); ?></td>
+                                    <td class="text-[#ccc]"><?php echo htmlspecialchars($p['department']); ?></td>
+                                    <td class="text-xs">
+                                        <?php if (!empty($p['pending_expires_at'])): ?>
+                                            <?php
+                                            $exp = strtotime($p['pending_expires_at']);
+                                            $hours = max(0, ceil(($exp - time()) / 3600));
+                                            if ($hours <= 24) {
+                                                echo '<span class="text-[#ef4444] font-semibold">' . $hours . 'h left</span>';
+                                            } else {
+                                                echo '<span class="text-[#fbbf24]">' . date('M d, H:i', $exp) . '</span>';
+                                            }
+                                            ?>
+                                        <?php else: ?>
+                                            <span class="text-[#666]">No expiry</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <form method="POST" class="inline">
+                                            <input type="hidden" name="action" value="approve_user">
+                                            <input type="hidden" name="user_id" value="<?php echo $p['id']; ?>">
+                                            <button type="submit" class="cyber-btn px-2 py-1 text-xs">
+                                                <i data-lucide="check" class="w-3 h-3"></i> Approve
+                                            </button>
+                                        </form>
+                                        <form method="POST" class="inline ml-1" onsubmit="return confirm('Reject this request?')">
+                                            <input type="hidden" name="action" value="reject_user">
+                                            <input type="hidden" name="user_id" value="<?php echo $p['id']; ?>">
+                                            <button type="submit" class="cyber-btn-danger px-2 py-1 text-xs">
+                                                <i data-lucide="x" class="w-3 h-3"></i> Reject
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endwhile; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- Add User Form -->
             <div class="cyber-card p-4 mb-6">
                 <h2 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -398,6 +510,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Department</th>
+                                <th>Status</th>
                                 <th>Created</th>
                                 <th>Actions</th>
                             </tr>
@@ -405,15 +518,53 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                         <tbody>
                             <?php if ($users && $users->num_rows > 0): ?>
                                 <?php while ($user = $users->fetch_assoc()): ?>
-                                    <tr data-search="<?php echo strtolower($user['name'] . ' ' . $user['email'] . ' ' . $user['department']); ?>">
+                                    <?php
+                                        $status_badge = '';
+                                        switch ($user['status']) {
+                                            case 'active': $status_badge = '<span class="badge badge-user">Active</span>'; break;
+                                            case 'pending': $status_badge = '<span class="badge badge-pending">Pending</span>'; break;
+                                            case 'rejected': $status_badge = '<span class="badge badge-rejected">Rejected</span>'; break;
+                                            case 'suspended': $status_badge = '<span class="badge badge-suspended">Suspended</span>'; break;
+                                            default: $status_badge = '<span class="badge badge-user">Active</span>';
+                                        }
+                                    ?>
+                                    <tr data-search="<?php echo strtolower($user['name'] . ' ' . $user['email'] . ' ' . $user['department'] . ' ' . $user['status']); ?>">
                                         <td class="text-[#00ff88] font-mono">#<?php echo $user['id']; ?></td>
                                         <td class="text-white font-medium"><?php echo htmlspecialchars($user['name']); ?></td>
                                         <td class="text-[#ccc]"><?php echo htmlspecialchars($user['email']); ?></td>
                                         <td class="text-[#ccc]"><?php echo htmlspecialchars($user['department']); ?></td>
+                                        <td><?php echo $status_badge; ?></td>
                                         <td class="text-[#666] text-xs"><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
                                         <td>
                                             <?php if ($user['id'] != $_SESSION['user_id']): ?>
-                                                <form method="POST" class="inline" onsubmit="return confirm('Delete this user?')">
+                                                <?php if ($user['status'] == 'pending'): ?>
+                                                    <form method="POST" class="inline">
+                                                        <input type="hidden" name="action" value="approve_user">
+                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                        <button type="submit" class="cyber-btn px-2 py-1 text-xs" title="Approve">
+                                                            <i data-lucide="check" class="w-3 h-3"></i>
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                                <?php if ($user['status'] == 'active'): ?>
+                                                    <form method="POST" class="inline" onsubmit="return confirm('Suspend this user?')">
+                                                        <input type="hidden" name="action" value="suspend_user">
+                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                        <button type="submit" class="cyber-btn px-2 py-1 text-xs" style="background: linear-gradient(135deg,#fbbf24,#f59e0b); color:#050507;" title="Suspend">
+                                                            <i data-lucide="pause" class="w-3 h-3"></i>
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                                <?php if ($user['status'] == 'suspended'): ?>
+                                                    <form method="POST" class="inline">
+                                                        <input type="hidden" name="action" value="activate_user">
+                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                        <button type="submit" class="cyber-btn px-2 py-1 text-xs" title="Activate">
+                                                            <i data-lucide="play" class="w-3 h-3"></i>
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                                <form method="POST" class="inline ml-1" onsubmit="return confirm('Delete this user?')">
                                                     <input type="hidden" name="action" value="delete_user">
                                                     <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
                                                     <button type="submit" class="cyber-btn-danger px-2 py-1 text-xs">
@@ -428,7 +579,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                 <?php endwhile; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="7" class="text-center text-[#666] py-12">
+                                    <td colspan="8" class="text-center text-[#666] py-12">
                                         <div class="flex flex-col items-center gap-3">
                                             <i data-lucide="users" class="w-12 h-12 text-[#333]"></i>
                                             <span class="text-sm">No users found</span>

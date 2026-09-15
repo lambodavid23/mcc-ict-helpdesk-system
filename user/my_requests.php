@@ -4,6 +4,11 @@ require_once '../config/database.php';
 
 requireRole('user');
 
+if (isPendingUser()) {
+    header('Location: dashboard.php');
+    exit();
+}
+
 $database = new Database();
 $conn = $database->getConnection();
 

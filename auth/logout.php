@@ -6,6 +6,12 @@
 
 session_start();
 
+// Clear remember-me token
+if (isset($_SESSION['user_id']) && isset($_SESSION['user_role'])) {
+    require_once '../config/auth_helper.php';
+    destroyRememberToken($_SESSION['user_role'], $_SESSION['user_id']);
+}
+
 // Log logout activity if user is logged in
 if (isset($_SESSION['user_id'])) {
     require_once '../config/database.php';

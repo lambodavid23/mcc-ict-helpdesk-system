@@ -11,6 +11,16 @@ $conn = $database->getConnection();
 $notifications = new NotificationService();
 $auto_assign = new AutoAssignmentService();
 
+$is_pending = isPendingUser();
+$pending_expires_at = null;
+if ($is_pending) {
+    $uid = (int)$_SESSION['user_id'];
+    $exp_result = $conn->query("SELECT pending_expires_at FROM users WHERE id = $uid AND status = 'pending' LIMIT 1");
+    if ($exp_result && $exp_result->num_rows > 0) {
+        $pending_expires_at = $exp_result->fetch_assoc()['pending_expires_at'];
+    }
+}
+
 $success = '';
 $error = '';
 
@@ -69,7 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($conn->query($insert_query)) {
             $ticket_id = $database->getLastId();
             
-            if (!empty($_FILES['attachment']['name'])) {
+            if (!$is_pending && !empty($_FILES['attachment']['name'])) {
                 $file = $_FILES['attachment'];
                 $allowed = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'txt', 'zip'];
                 $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
@@ -451,10 +461,12 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                     <i data-lucide="plus-circle" class="w-4 h-4"></i>
                     New Ticket
                 </a>
+                <?php if (!$is_pending): ?>
                 <a href="my_requests.php" class="sidebar-item">
                     <i data-lucide="ticket" class="w-4 h-4"></i>
                     My Tickets
                 </a>
+                <?php endif; ?>
             </nav>
             
             <!-- User Info -->
@@ -488,6 +500,37 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                     <span>System Online</span>
                 </div>
             </header>
+            
+            <?php if ($is_pending && $pending_expires_at): ?>
+            <?php
+                $exp = strtotime($pending_expires_at);
+                $hours_left = max(0, ceil(($exp - time()) / 3600));
+                $days_left = floor($hours_left / 24);
+                $hours_display = $hours_left % 24;
+            ?>
+            <div class="cyber-card p-4 mb-6" style="border-color: rgba(251, 191, 36, 0.35);">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3);">
+                        <i data-lucide="clock" class="w-5 h-5 text-[#fbbf24]"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-white">Pending Approval</p>
+                        <p class="text-[11px] text-[#888] mt-0.5">
+                            Temporary access expires in
+                            <span class="text-[#fbbf24] font-semibold">
+                                <?php if ($days_left > 0): ?>
+                                    <?php echo $days_left; ?> day<?php echo $days_left != 1 ? 's' : ''; ?>
+                                    <?php if ($hours_display > 0): ?>, <?php echo $hours_display; ?>h<?php endif; ?>
+                                <?php else: ?>
+                                    <?php echo $hours_left; ?> hour<?php echo $hours_left != 1 ? 's' : ''; ?>
+                                <?php endif; ?>
+                            </span>.
+                            You can submit tickets. File uploads will be available after admin approval.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
             
             <?php if ($error): ?>
                 <div class="alert-error mb-6 flex items-center gap-3">
@@ -540,11 +583,21 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                                 <p class="text-xs text-[#444] mt-2">Tip: Include any error messages, steps to reproduce, and what you've already tried.</p>
                             </div>
                             
+                            <?php if ($is_pending): ?>
+                            <div class="mb-4">
+                                <label class="cyber-label" style="color: #fbbf24;">File Upload Unavailable</label>
+                                <div class="bg-[#0f0f15] border border-[#1a1a2e] rounded-lg px-4 py-3 flex items-center gap-3">
+                                    <i data-lucide="lock" class="w-4 h-4 text-[#fbbf24] flex-shrink-0"></i>
+                                    <p class="text-xs text-[#888]">File uploads (screenshots/attachments) are available once your account is approved.</p>
+                                </div>
+                            </div>
+                            <?php else: ?>
                             <div class="mb-4">
 <label class="cyber-label">Upload a Picture of the Error (Optional)</label>
 <input type="file" name="attachment" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.txt,.zip" class="text-sm text-[#ccc] file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-[#00ff88]/20 file:text-[#00ff88] file:font-semibold file:cursor-pointer hover:file:bg-[#00ff88]/30">
 <p class="text-xs text-[#444] mt-1">Max 5MB. A screenshot or photo of the error message is most helpful.</p>
                             </div>
+                            <?php endif; ?>
                             
                             <div class="flex gap-3">
                                 <button type="submit" class="cyber-btn">

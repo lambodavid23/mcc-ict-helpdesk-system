@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once '../config/auth_helper.php';
 require_once '../config/database.php';
 
 if (isset($_SESSION['user_id'])) {
@@ -34,7 +34,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $user = null;
         $role = null;
         foreach ($login_tables as $role_name => $table) {
-            $query = "SELECT id, name, email, password, department FROM $table WHERE email = '$email' LIMIT 1";
+            $status_field = ($table === 'users') ? ', status, pending_expires_at' : '';
+            $query = "SELECT id, name, email, password, department$status_field FROM $table WHERE email = '$email' LIMIT 1";
             $result = $conn->query($query);
             if ($result && $result->num_rows == 1) {
                 $user = $result->fetch_assoc();
@@ -45,32 +46,65 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         
         if ($user) {
             if (password_verify($password, $user['password'])) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['user_name'] = $user['name'];
-                $_SESSION['user_email'] = $user['email'];
-                $_SESSION['user_role'] = $role;
-                $_SESSION['user_department'] = $user['department'];
-                
-                $ip_address = $_SERVER['REMOTE_ADDR'];
-                $user_agent = $_SERVER['HTTP_USER_AGENT'];
-                $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
-                             VALUES ('{$user['id']}', '$role', 'LOGIN', 'User logged into system', '$ip_address', '$user_agent')";
-                $conn->query($log_query);
-                
-                switch ($role) {
-                    case 'admin':
-                        header('Location: ../admin/dashboard.php');
-                        break;
-                    case 'technician':
-                        header('Location: ../technician/dashboard.php');
-                        break;
-                    case 'user':
-                        header('Location: ../user/dashboard.php');
-                        break;
-                    default:
-                        header('Location: ../index.php');
+                if ($role === 'user' && isset($user['status']) && $user['status'] !== 'active') {
+                    if ($user['status'] === 'pending') {
+                        if (isset($user['pending_expires_at']) && strtotime($user['pending_expires_at']) < time()) {
+                            $conn->query("UPDATE users SET status = 'rejected' WHERE id = " . (int)$user['id']);
+                            $errors[] = 'Your registration request has expired after 3 days without approval. Please contact the ICT department.';
+                        } else {
+                            $_SESSION['user_id'] = $user['id'];
+                            $_SESSION['user_name'] = $user['name'];
+                            $_SESSION['user_email'] = $user['email'];
+                            $_SESSION['user_role'] = $role;
+                            $_SESSION['user_department'] = $user['department'];
+                            $_SESSION['user_status'] = 'pending';
+
+                            $ip_address = $_SERVER['REMOTE_ADDR'];
+                            $user_agent = $_SERVER['HTTP_USER_AGENT'];
+                            $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
+                                         VALUES ('{$user['id']}', '$role', 'LOGIN', 'Pending user logged in with temporary access', '$ip_address', '$user_agent')";
+                            $conn->query($log_query);
+
+                            header('Location: ../user/dashboard.php');
+                            exit();
+                        }
+                    } elseif ($user['status'] === 'rejected') {
+                        $errors[] = 'Your registration request was rejected. Please contact the ICT department.';
+                    } else {
+                        $errors[] = 'Your account has been ' . $user['status'] . '. Please contact the ICT department.';
+                    }
+                } else {
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['user_name'] = $user['name'];
+                    $_SESSION['user_email'] = $user['email'];
+                    $_SESSION['user_role'] = $role;
+                    $_SESSION['user_department'] = $user['department'];
+                    
+                    $ip_address = $_SERVER['REMOTE_ADDR'];
+                    $user_agent = $_SERVER['HTTP_USER_AGENT'];
+                    $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
+                                 VALUES ('{$user['id']}', '$role', 'LOGIN', 'User logged into system', '$ip_address', '$user_agent')";
+                    $conn->query($log_query);
+                    
+                    if (isset($_POST['remember'])) {
+                        issueRememberToken($role, $user['id']);
+                    }
+
+                    switch ($role) {
+                        case 'admin':
+                            header('Location: ../admin/dashboard.php');
+                            break;
+                        case 'technician':
+                            header('Location: ../technician/dashboard.php');
+                            break;
+                        case 'user':
+                            header('Location: ../user/dashboard.php');
+                            break;
+                        default:
+                            header('Location: ../index.php');
+                    }
+                    exit();
                 }
-                exit();
             } else {
                 $errors[] = 'Invalid email or password';
             }
@@ -174,10 +208,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 <div class="flex items-center justify-between">
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" class="w-3.5 h-3.5 accent-[#00ff88] rounded">
+                        <input type="checkbox" name="remember" class="w-3.5 h-3.5 accent-[#00ff88] rounded">
                         <span class="text-[#555] text-xs">Remember</span>
                     </label>
-                    <a href="#" class="text-[#00ff88] text-xs hover:underline">Forgot password?</a>
+                    <a href="forgot_password.php" class="text-[#00ff88] text-xs hover:underline">Forgot password?</a>
                 </div>
                 
                 <button type="submit" class="btn-cyber w-full bg-[#0f0f15] border border-[#1a1a2e] hover:border-[#00ff88] text-[#00ff88] py-2.5 rounded-lg text-sm font-semibold tracking-wide transition-all hover:bg-[#00ff88]/5 flex items-center justify-center gap-2 mt-2">

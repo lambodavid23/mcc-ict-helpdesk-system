@@ -46,6 +46,9 @@ while ($row = $result->fetch_assoc()) {
     $category_stats[$row['category']] = $row['count'];
 }
 
+$pending_users = $conn->query("SELECT id, name, email, department, pending_expires_at FROM users WHERE status = 'pending' ORDER BY created_at DESC");
+$pending_count = $pending_users ? $pending_users->num_rows : 0;
+
 $top_technicians = $conn->query("SELECT tech.name, COUNT(fh.id) as resolved_count 
                                  FROM technicians tech 
                                  LEFT JOIN fault_history fh ON tech.id = fh.resolved_by 
@@ -283,6 +286,43 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
                 </div>
             </header>
             
+            <?php if ($pending_count > 0): ?>
+            <div class="cyber-card p-4 mb-6" style="border-color: rgba(251, 191, 36, 0.35);">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3);">
+                            <i data-lucide="user-check" class="w-5 h-5 text-[#fbbf24]"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-white"><?php echo $pending_count; ?> user<?php echo $pending_count > 1 ? 's' : ''; ?> awaiting approval</p>
+                            <p class="text-[11px] text-[#888] mt-0.5">
+                                <?php
+                                $soonest = null;
+                                $pending_users->data_seek(0);
+                                while ($p = $pending_users->fetch_assoc()) {
+                                    if (!empty($p['pending_expires_at'])) {
+                                        $exp = strtotime($p['pending_expires_at']);
+                                        if ($soonest === null || $exp < $soonest) $soonest = $exp;
+                                    }
+                                }
+                                if ($soonest) {
+                                    $hours = max(0, ceil(($soonest - time()) / 3600));
+                                    echo "Expires in $hours hour" . ($hours != 1 ? 's' : '') . " unless approved.";
+                                } else {
+                                    echo "These need your review.";
+                                }
+                                ?>
+                            </p>
+                        </div>
+                    </div>
+                    <a href="manage_users.php" class="cyber-btn" style="background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.3); color: #fbbf24;">
+                        <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                        Review
+                    </a>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- Stats Grid -->
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div class="cyber-card p-4">
