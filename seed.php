@@ -5,7 +5,7 @@ $db = new Database();
 $conn = $db->getConnection();
 
 $conn->query("SET FOREIGN_KEY_CHECKS = 0");
-foreach (['system_logs', 'fault_history', 'ticket_assignments', 'tickets', 'knowledge_base', 'technicians', 'admins', 'users'] as $t) {
+foreach (['ticket_update_deletions', 'system_logs', 'fault_history', 'ticket_assignments', 'tickets', 'knowledge_base', 'technicians', 'admins', 'users'] as $t) {
     $conn->query("DROP TABLE IF EXISTS $t");
 }
 $conn->query("SET FOREIGN_KEY_CHECKS = 1");
@@ -95,6 +95,10 @@ CREATE TABLE ticket_assignments (
     assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status ENUM('active', 'completed', 'cancelled') DEFAULT 'active',
     notes TEXT,
+    previous_status VARCHAR(50) DEFAULT NULL,
+    new_status VARCHAR(50) DEFAULT NULL,
+    deleted_at TIMESTAMP NULL,
+    deleted_by INT NULL,
     FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
     FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
 )");
@@ -108,8 +112,22 @@ CREATE TABLE fault_history (
     resolved_by INT,
     resolved_at TIMESTAMP NULL,
     time_to_resolve INT,
+    deleted_at TIMESTAMP NULL,
+    deleted_by INT NULL,
     FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
     FOREIGN KEY (resolved_by) REFERENCES technicians(id)
+)");
+
+$conn->query("
+CREATE TABLE ticket_update_deletions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    technician_id INT NOT NULL,
+    ticket_id INT NOT NULL,
+    record_type ENUM('status_update', 'solution') NOT NULL,
+    record_id INT NOT NULL,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
 )");
 
 $conn->query("

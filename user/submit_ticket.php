@@ -28,22 +28,61 @@ $is_ajax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTT
 
 function detectCategory($text) {
     $text = strtolower($text);
+    
+    // Weighted keyword lists: weight 3 = strongly specific, 2 = likely, 1 = weak/supporting
     $keywords = [
-        'network'   => ['wifi', 'wi-fi', 'internet', 'network', 'connection', 'ethernet', 'lan', 'vpn', 'router', 'modem', 'connect', 'cable', 'wireless'],
-        'hardware'  => ['printer', 'keyboard', 'mouse', 'monitor', 'screen', 'battery', 'hard drive', 'hard disk', 'ram', 'boot', 'crash', 'slow', 'overheat', 'power', 'dead phone', 'laptop', 'desktop', 'speaker', 'camera', 'charger', 'port', 'usb'],
-        'software'  => ['software', 'install', 'application', 'program', 'excel', 'word', 'outlook', 'emails', 'e-mail', 'email', 'update', 'windows', 'office', 'license', 'virus', 'error', 'freeze', 'freezing', 'download', 'files', 'document', 'system', 'app'],
-        'login'     => ['login', 'log in', 'password', 'account locked', 'username', 'logon', 'can\'t login', 'cannot login', 'forgot', 'reset password', 'locked out', 'access'],
+        'network' => [
+            3 => ['wifi', 'wi-fi', 'internet', 'network', 'ethernet', 'lan', 'vpn', 'router', 'modem', 'wireless', 'no internet', 'offline', 'disconnected', 'ip address'],
+            2 => ['connection', 'connect', 'cable', 'signal', 'server', 'ping', 'wired'],
+            1 => ['online', 'link', 'dead'],
+        ],
+        'hardware' => [
+            3 => ['printer', 'keyboard', 'mouse', 'monitor', 'screen', 'battery', 'charger', 'hard drive', 'hard disk', 'ram', 'overheat', 'power supply', 'dead phone', 'speaker', 'camera', 'usb', 'port', 'torn cable', 'broken part'],
+            2 => ['power', 'laptop', 'desktop', 'pc', 'not booting', "won't turn on", "won't switch on", 'wont turn on', 'wont switch on', 'fan', 'booting'],
+            1 => ['device', 'machine', 'computer', 'slow', 'crash', 'blue screen'],
+        ],
+        'software' => [
+            3 => ['software', 'install', 'uninstall', 'reinstall', 'application', 'program', 'excel', 'word', 'outlook', 'windows', 'office', 'license', 'activation', 'virus', 'malware', 'download', 'update', 'upgrade', 'freeze', 'freezing', 'crashing', 'error message'],
+            2 => ['email', 'emails', 'e-mail', 'files', 'document', 'app', 'system', 'driver', 'error', 'corrupt'],
+            1 => ['restart', 'speed', 'performance', 'screen freeze'],
+        ],
+        'login' => [
+            3 => ['login', 'log in', 'password', 'username', 'logon', 'account locked', 'locked out', "can't login", 'cannot login', 'unable to login', 'reset password', 'credentials', 'access denied', 'authentication', 'forgot'],
+            2 => ['access', 'account', 'sign in', 'log onto', 'two-factor', '2fa', 'otp'],
+            1 => ['user', 'profile'],
+        ],
     ];
-    $best = 'software';
+    
+    $bestCategory = 'software';
     $bestScore = 0;
-    foreach ($keywords as $cat => $words) {
+    $bestTopWeight = 0;
+    $matchedAny = false;
+    
+    foreach ($keywords as $category => $weightedWords) {
         $score = 0;
-        foreach ($words as $kw) {
-            if (strpos($text, $kw) !== false) $score++;
+        $topWeight = 0;
+        
+        foreach ($weightedWords as $weight => $words) {
+            foreach ($words as $word) {
+                // Word-boundary match with optional plural suffix (matches "printer"/"printers")
+                $pattern = '/\b' . preg_quote($word, '/') . '(?:s|es)?\b/';
+                if (preg_match($pattern, $text)) {
+                    $score += $weight;
+                    $topWeight = max($topWeight, $weight);
+                    $matchedAny = true;
+                }
+            }
         }
-        if ($score > $bestScore) { $best = $cat; $bestScore = $score; }
+        
+        // Prefer higher total score; tie-break by the strongest keyword matched
+        if ($score > $bestScore || ($score === $bestScore && $topWeight > $bestTopWeight)) {
+            $bestScore = $score;
+            $bestTopWeight = $topWeight;
+            $bestCategory = $category;
+        }
     }
-    return $best;
+    
+    return $matchedAny ? $bestCategory : 'software';
 }
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {

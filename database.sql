@@ -94,6 +94,10 @@ CREATE TABLE ticket_assignments (
     assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status ENUM('active', 'completed', 'cancelled') DEFAULT 'active',
     notes TEXT,
+    previous_status VARCHAR(50) DEFAULT NULL COMMENT 'Status before the change (for status updates)',
+    new_status VARCHAR(50) DEFAULT NULL COMMENT 'Status after the change (for status updates)',
+    deleted_at TIMESTAMP NULL COMMENT 'Soft-delete marker',
+    deleted_by INT NULL COMMENT 'Technician who soft-deleted this record',
     FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
     FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
 );
@@ -107,8 +111,22 @@ CREATE TABLE fault_history (
     resolved_by INT,
     resolved_at TIMESTAMP NULL,
     time_to_resolve INT COMMENT 'Time in minutes',
+    deleted_at TIMESTAMP NULL COMMENT 'Soft-delete marker',
+    deleted_by INT NULL COMMENT 'Technician who soft-deleted this record',
     FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
     FOREIGN KEY (resolved_by) REFERENCES technicians(id)
+);
+
+-- Ticket update deletion quota/audit log
+CREATE TABLE ticket_update_deletions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    technician_id INT NOT NULL,
+    ticket_id INT NOT NULL,
+    record_type ENUM('status_update', 'solution') NOT NULL,
+    record_id INT NOT NULL,
+    details TEXT COMMENT 'Snapshot of deleted content for the audit trail',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
 );
 
 -- Knowledge base table

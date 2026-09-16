@@ -6,11 +6,14 @@
 
 require_once '../config/auth_helper.php';
 require_once '../config/database.php';
+require_once '../config/TicketActionService.php';
 
 requireRole('technician');
 
 $database = new Database();
 $conn = $database->getConnection();
+
+$ticket_actions = new TicketActionService();
 
 // Get current technician info
 $technician_query = "SELECT * FROM technicians WHERE id = " . (int)$_SESSION['user_id'];
@@ -43,22 +46,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $new_status = $_POST['new_status'];
                 $notes = trim($_POST['notes']);
                 
-                $update_query = "UPDATE tickets SET status = '" . $conn->real_escape_string($new_status) . "' 
-                               WHERE id = " . (int)$ticket_id;
-                
-                if ($conn->query($update_query)) {
-                    // Add note to ticket assignments if provided
-                    if (!empty($notes)) {
-                        $notes = $conn->real_escape_string($notes);
-                        $assignment_query = "INSERT INTO ticket_assignments (ticket_id, technician_id, notes) 
-                                           VALUES ($ticket_id, " . $technician['id'] . ", '$notes')";
-                        $conn->query($assignment_query);
-                    }
-                    
-                    $success = 'Ticket status updated successfully';
-                    logActivity('UPDATE_TICKET_STATUS', "Updated ticket $ticket_id status to $new_status");
+                $result = $ticket_actions->updateStatus($ticket_id, $technician['id'], $new_status, $notes);
+                if ($result['success']) {
+                    $success = $result['message'];
                 } else {
-                    $error = 'Failed to update ticket status';
+                    $error = $result['message'];
                 }
                 break;
                 
@@ -95,6 +87,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     }
                 }
                 break;
+                
+            case 'delete_status_update':
+                $result = $ticket_actions->deleteStatusUpdate($ticket_id, $technician['id'], (int)$_POST['assignment_id']);
+                if ($result['success']) {
+                    $success = $result['message'];
+                } else {
+                    $error = $result['message'];
+                }
+                break;
+                
+            case 'delete_solution':
+                $result = $ticket_actions->deleteSolution($ticket_id, $technician['id'], (int)$_POST['history_id']);
+                if ($result['success']) {
+                    $success = $result['message'];
+                } else {
+                    $error = $result['message'];
+                }
+                break;
         }
         
         // Reload ticket data after update
@@ -119,21 +129,30 @@ if ($ticket_id > 0) {
     }
 }
 
-// Get ticket history
+// Get ticket history (live records only; legacy soft-deleted rows stay hidden)
 $history_query = "SELECT fh.*, tech.name as technician_name 
                   FROM fault_history fh 
                   LEFT JOIN technicians tech ON fh.resolved_by = tech.id 
-                  WHERE fh.ticket_id = $ticket_id 
+                  WHERE fh.ticket_id = $ticket_id AND fh.deleted_at IS NULL
                   ORDER BY fh.resolved_at DESC";
 $history = $conn->query($history_query);
 
-// Get ticket assignments
+// Get ticket assignments (live records only; legacy soft-deleted rows stay hidden)
 $assignments_query = "SELECT ta.*, tech.name as technician_name 
                      FROM ticket_assignments ta 
                      LEFT JOIN technicians tech ON ta.technician_id = tech.id 
-                     WHERE ta.ticket_id = $ticket_id 
+                     WHERE ta.ticket_id = $ticket_id AND ta.deleted_at IS NULL
                      ORDER BY ta.assigned_at DESC";
 $assignments = $conn->query($assignments_query);
+
+// Latest status update id, used to decide whether deleting it reverts the ticket
+$latest_status_update = $conn->query(
+    "SELECT MAX(id) as max_id FROM ticket_assignments
+     WHERE ticket_id = $ticket_id AND deleted_at IS NULL AND previous_status IS NOT NULL"
+)->fetch_assoc();
+$latest_status_update_id = (int)($latest_status_update['max_id'] ?? 0);
+
+$deletions_remaining = $ticket_actions->deletionsRemaining($technician['id']);
 
 logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $ticket_id");
 ?>
@@ -241,7 +260,7 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
             <?php if ($ticket['status'] != 'resolved'): ?>
             <div class="card" style="margin-top: 1.5rem;">
                 <div class="card-header">
-                    <h3 class="card-title">Update Status</h3>
+                    <h3 class="card-title">Update Resolution / Status</h3>
                 </div>
                 <form method="POST" action="">
                     <input type="hidden" name="action" value="update_status">
@@ -253,15 +272,14 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
                                 <option value="">Select Status</option>
                                 <option value="open" <?php echo $ticket['status'] == 'open' ? 'selected' : ''; ?>>Open</option>
                                 <option value="in_progress" <?php echo $ticket['status'] == 'in_progress' ? 'selected' : ''; ?>>In Progress</option>
-                                <option value="resolved">Resolved</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="notes" class="form-label">Notes (Optional)</label>
-                            <input type="text" id="notes" name="notes" class="form-input" placeholder="Add notes about this status change...">
+                            <label for="notes" class="form-label">Resolution / Action Taken <span style="color: #ef4444;">*</span></label>
+                            <textarea id="notes" name="notes" class="form-textarea" rows="3" placeholder="You must describe the resolution or action taken to change the status..." required></textarea>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Update Status</button>
+                    <button type="submit" class="btn btn-primary">Save Update</button>
                 </form>
             </div>
             <?php endif; ?>
@@ -284,6 +302,75 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
             </div>
             <?php endif; ?>
 
+            <!-- Delete Updated Status / Resolution -->
+            <div class="card" style="margin-top: 1.5rem; border-color: rgba(127, 29, 29, 0.4);">
+                <div class="card-header">
+                    <h3 class="card-title">Delete Updated Status / Resolution</h3>
+                    <span class="badge badge-in-progress">Deletions left today: <?php echo $deletions_remaining; ?>/2</span>
+                </div>
+                
+                <?php if ($deletions_remaining > 0): ?>
+                    <?php $has_own_records = false; ?>
+                    
+                    <?php if ($history && $history->num_rows > 0): ?>
+                        <?php $history->data_seek(0); while ($item = $history->fetch_assoc()): ?>
+                            <?php if ((int)$item['resolved_by'] === (int)$technician['id']): $has_own_records = true; ?>
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 1rem; border-bottom: 1px solid #1e293b;">
+                                    <div style="flex: 1; min-width: 0;">
+                                        <span class="badge badge-resolved">Solution</span>
+                                        <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.5rem;"><?php echo formatDate($item['resolved_at']); ?></span>
+                                        <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.25rem; word-wrap: break-word;">
+                                            <?php echo htmlspecialchars($item['solution']); ?>
+                                        </div>
+                                    </div>
+                                    <form method="POST" action="" style="flex-shrink: 0;"
+                                          onsubmit="return confirm('Permanently delete this resolution? If it was the last one, the ticket returns to In Progress. You have <?php echo $deletions_remaining; ?>/2 deletions left today.')">
+                                        <input type="hidden" name="action" value="delete_solution">
+                                        <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
+                                        <input type="hidden" name="history_id" value="<?php echo $item['id']; ?>">
+                                        <button type="submit" class="btn btn-sm" style="background: #7f1d1d; color: #fff; border: none; border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.75rem; cursor: pointer;">Delete</button>
+                                    </form>
+                                </div>
+                            <?php endif; ?>
+                        <?php endwhile; ?>
+                    <?php endif; ?>
+                    
+                    <?php if ($assignments && $assignments->num_rows > 0): ?>
+                        <?php $assignments->data_seek(0); while ($assignment = $assignments->fetch_assoc()): ?>
+                            <?php if ($assignment['previous_status'] !== null && (int)$assignment['technician_id'] === (int)$technician['id']): $has_own_records = true; ?>
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 1rem; border-bottom: 1px solid #1e293b;">
+                                    <div style="flex: 1; min-width: 0;">
+                                        <span class="badge badge-in-progress">Status Update</span>
+                                        <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.5rem;">
+                                            <?php echo ucfirst($assignment['previous_status']); ?> &rarr; <?php echo ucfirst($assignment['new_status']); ?>
+                                            &middot; <?php echo formatDate($assignment['assigned_at']); ?>
+                                        </span>
+                                        <?php if ($assignment['notes']): ?>
+                                            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.25rem; word-wrap: break-word;">
+                                                <?php echo htmlspecialchars($assignment['notes']); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <form method="POST" action="" style="flex-shrink: 0;"
+                                          onsubmit="return confirm('<?php echo (int)$assignment['id'] === $latest_status_update_id ? 'Permanently delete? The ticket status will be reverted to ' . ucfirst($assignment['previous_status']) . '.' : 'Permanently delete? This only removes the history entry; the ticket status stays unchanged.'; ?> You have <?php echo $deletions_remaining; ?>/2 deletions left today.')">
+                                        <input type="hidden" name="action" value="delete_status_update">
+                                        <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
+                                        <input type="hidden" name="assignment_id" value="<?php echo $assignment['id']; ?>">
+                                        <button type="submit" class="btn btn-sm" style="background: #7f1d1d; color: #fff; border: none; border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.75rem; cursor: pointer;">Delete</button>
+                                    </form>
+                                </div>
+                            <?php endif; ?>
+                        <?php endwhile; ?>
+                    <?php endif; ?>
+                    
+                    <?php if (!$has_own_records): ?>
+                        <p style="color: #94a3b8; font-size: 0.85rem; padding: 0.75rem 1rem;">No status updates or resolutions created by you on this ticket.</p>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <p style="color: #ef4444; font-size: 0.85rem; padding: 0.75rem 1rem;">You have used all your deletions for today (2/2). Try again tomorrow.</p>
+                <?php endif; ?>
+            </div>
+
             <!-- Ticket History -->
             <div class="card" style="margin-top: 1.5rem;">
                 <div class="card-header">
@@ -301,7 +388,7 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
                         </thead>
                         <tbody>
                             <?php if ($history && $history->num_rows > 0): ?>
-                                <?php while ($item = $history->fetch_assoc()): ?>
+                                <?php $history->data_seek(0); while ($item = $history->fetch_assoc()): ?>
                                     <tr>
                                         <td><?php echo formatDate($item['resolved_at']); ?></td>
                                         <td><span class="badge badge-resolved">Solution Added</span></td>
@@ -318,12 +405,21 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
                             <?php endif; ?>
                             
                             <?php if ($assignments && $assignments->num_rows > 0): ?>
-                                <?php while ($assignment = $assignments->fetch_assoc()): ?>
+                                <?php $assignments->data_seek(0); while ($assignment = $assignments->fetch_assoc()): ?>
                                     <tr>
                                         <td><?php echo formatDate($assignment['assigned_at']); ?></td>
-                                        <td><span class="badge badge-in-progress">Status Update</span></td>
+                                        <td>
+                                            <?php if ($assignment['previous_status'] !== null): ?>
+                                                <span class="badge badge-in-progress">Status Update</span>
+                                            <?php else: ?>
+                                                <span class="badge badge-in-progress">Assignment</span>
+                                            <?php endif; ?>
+                                        </td>
                                         <td><?php echo htmlspecialchars($assignment['technician_name']); ?></td>
                                         <td>
+                                            <?php if ($assignment['previous_status'] !== null): ?>
+                                                <strong>Status:</strong> <?php echo ucfirst($assignment['previous_status']); ?> &rarr; <?php echo ucfirst($assignment['new_status']); ?><br>
+                                            <?php endif; ?>
                                             <?php if ($assignment['notes']): ?>
                                                 <?php echo htmlspecialchars($assignment['notes']); ?>
                                             <?php else: ?>

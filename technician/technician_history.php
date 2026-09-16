@@ -28,24 +28,65 @@ if (!$technician) {
 
 $tech_id = $technician['id'];
 
+require_once '../config/TicketActionService.php';
+$ticket_actions = new TicketActionService();
+$deletions_remaining = $ticket_actions->deletionsRemaining($tech_id);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+    $ticket_id = (int)($_POST['ticket_id'] ?? 0);
+    $result = null;
+
+    if ($action === 'update_status') {
+        $result = $ticket_actions->updateStatus(
+            $ticket_id,
+            $tech_id,
+            $_POST['new_status'] ?? '',
+            $_POST['resolution'] ?? ''
+        );
+    } elseif ($action === 'delete_status_update') {
+        $result = $ticket_actions->deleteStatusUpdate(
+            $ticket_id,
+            $tech_id,
+            (int)($_POST['assignment_id'] ?? 0)
+        );
+    } elseif ($action === 'delete_solution') {
+        $result = $ticket_actions->deleteSolution(
+            $ticket_id,
+            $tech_id,
+            (int)($_POST['history_id'] ?? 0)
+        );
+    } elseif ($action === 'edit_solution') {
+        $result = $ticket_actions->editSolution(
+            (int)($_POST['history_id'] ?? 0),
+            $tech_id,
+            $_POST['solution'] ?? ''
+        );
+    }
+
+    if ($result) {
+        $_SESSION['flash_message'] = $result['success'] ? [true, $result['message']] : [false, $result['message']];
+    }
+    header('Location: technician_history.php');
+    exit;
+}
+
+$flash_message = $_SESSION['flash_message'] ?? null;
+unset($_SESSION['flash_message']);
+
 $stats = [
-    'total_resolved' => $conn->query("SELECT COUNT(*) as c FROM fault_history WHERE resolved_by = $tech_id")->fetch_assoc()['c'] ?? 0,
-    'avg_time' => $conn->query("SELECT AVG(time_to_resolve) as avg FROM fault_history WHERE resolved_by = $tech_id")->fetch_assoc()['avg'] ?? 0,
+    'total_resolved' => $conn->query("SELECT COUNT(*) as c FROM fault_history WHERE resolved_by = $tech_id AND deleted_at IS NULL")->fetch_assoc()['c'] ?? 0,
+    'avg_time' => $conn->query("SELECT AVG(time_to_resolve) as avg FROM fault_history WHERE resolved_by = $tech_id AND deleted_at IS NULL")->fetch_assoc()['avg'] ?? 0,
 ];
 
-$history_query = $tech_id > 0
-    ? "SELECT fh.*, t.title, t.category, u.name as resolved_for
-       FROM fault_history fh
-       JOIN tickets t ON fh.ticket_id = t.id
-       LEFT JOIN users u ON t.created_by = u.id
-       WHERE fh.resolved_by = $tech_id
-       ORDER BY fh.resolved_at DESC
-       LIMIT 50"
-    : "SELECT fh.*, t.title, t.category, u.name as resolved_for
-       FROM fault_history fh
-       JOIN tickets t ON fh.ticket_id = t.id
-       LEFT JOIN users u ON t.created_by = u.id
-       WHERE 1=0 LIMIT 0";
+$history_query = "SELECT fh.*, t.title, t.category, t.status, u.name as resolved_for, tech.name as technician_name
+   FROM fault_history fh
+   JOIN tickets t ON fh.ticket_id = t.id
+   LEFT JOIN users u ON t.created_by = u.id
+   LEFT JOIN technicians tech ON fh.resolved_by = tech.id
+   WHERE fh.deleted_at IS NULL
+   ORDER BY fh.resolved_at DESC
+   LIMIT 50";
 $history = $conn->query($history_query);
 
 logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
@@ -176,8 +217,8 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
         <main class="ml-64 flex-1 p-6 h-screen overflow-y-auto">
             <header class="flex items-center justify-between mb-6">
                 <div>
-                    <h1 class="text-xl font-bold text-white glow-text">My History</h1>
-                    <p class="text-xs text-[#666] mt-0.5">Your resolved tickets</p>
+                    <h1 class="text-xl font-bold text-white glow-text">History</h1>
+                    <p class="text-xs text-[#666] mt-0.5">Solutions added by every technician</p>
                 </div>
             </header>
             
@@ -209,7 +250,13 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
             
             <!-- History Table -->
             <div class="cyber-card p-4">
-                <h2 class="text-sm font-semibold text-white mb-4">Resolved Tickets</h2>
+                <h2 class="text-sm font-semibold text-white mb-4">All Solutions (Every Technician)</h2>
+                
+                <?php if ($flash_message): ?>
+                    <div class="mb-4" style="padding: 0.75rem 1rem; border-radius: 10px; font-size: 0.8rem; <?php echo $flash_message[0] ? 'background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3); color: #00ff88;' : 'background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #ef4444;'; ?>">
+                        <?php echo htmlspecialchars($flash_message[1]); ?>
+                    </div>
+                <?php endif; ?>
                 
                 <?php if ($history && $history->num_rows > 0): ?>
                     <div class="overflow-x-auto">
@@ -219,25 +266,51 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
                                     <th>Ticket</th>
                                     <th>Category</th>
                                     <th>For User</th>
+                                    <th>Technician</th>
                                     <th>Resolution</th>
                                     <th>Time</th>
                                     <th>Resolved At</th>
+                                    <th>Manage</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php while ($row = $history->fetch_assoc()): ?>
                                     <tr>
                                         <td>
-                                            <div class="text-[#00ff88] font-mono">#<?php echo $row['ticket_id']; ?></div>
+                                            <div class="text-[#00ff88] font-mono">#<?php echo $row['ticket_id']; ?>
+                                                <?php if ($row['status'] !== 'resolved'): ?>
+                                                    <span class="badge badge-in-progress" style="margin-left: 0.3rem;">Still In Progress - Not Resolved Yet</span>
+                                                <?php else: ?>
+                                                    <span class="badge badge-resolved" style="margin-left: 0.3rem;">Resolved</span>
+                                                <?php endif; ?>
+                                            </div>
                                             <div class="text-white text-sm truncate max-w-xs"><?php echo htmlspecialchars($row['title']); ?></div>
                                         </td>
                                         <td class="capitalize"><?php echo $row['category']; ?></td>
                                         <td><?php echo htmlspecialchars($row['resolved_for']); ?></td>
+                                        <td><?php echo htmlspecialchars($row['technician_name'] ?: 'Unknown'); ?></td>
                                         <td>
                                             <button onclick="showSolution(<?php echo htmlspecialchars(json_encode($row['solution'])); ?>)" class="text-[#00ff88] hover:underline text-xs">View Solution</button>
                                         </td>
-                                        <td class="text-[#00ff88]"><?php echo $row['time_to_resolve']; ?> min</td>
-                                        <td class="text-[#666] text-xs"><?php echo date('M d, Y H:i', strtotime($row['resolved_at'])); ?></td>
+                                        <td class="text-[#00ff88]"><?php echo $row['status'] === 'resolved' ? $row['time_to_resolve'] . ' min' : '<span class="text-[#666]">&mdash;</span>'; ?></td>
+                                        <td class="text-[#666] text-xs"><?php echo $row['status'] === 'resolved' ? date('M d, Y H:i', strtotime($row['resolved_at'])) : 'Still in progress'; ?></td>
+                                        <td>
+                                            <button onclick="toggleManageRow(<?php echo $row['ticket_id']; ?>)" class="text-[#00ff88] hover:underline text-xs">
+                                                <i data-lucide="edit" class="w-3 h-3 inline"></i> Manage
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr id="hist-mgr-<?php echo $row['ticket_id']; ?>" class="hidden">
+                                        <td colspan="8">
+                                            <?php
+                                            $manage_ticket = [
+                                                'id' => (int)$row['ticket_id'],
+                                                'status' => $row['status']
+                                            ];
+                                            $ticket = $manage_ticket;
+                                            include '_manage_panel.php';
+                                            ?>
+                                        </td>
                                     </tr>
                                 <?php endwhile; ?>
                             </tbody>
@@ -246,7 +319,7 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
                 <?php else: ?>
                     <div class="text-center py-12">
                         <i data-lucide="inbox" class="w-12 h-12 text-[#333] mx-auto mb-3"></i>
-                        <p class="text-[#666]">No resolved tickets yet</p>
+                        <p class="text-[#666]">No solutions yet</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -276,6 +349,15 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
         
         function closeModal() {
             document.getElementById('solutionModal').classList.add('hidden');
+        }
+        
+        function toggleManageRow(id) {
+            const row = document.getElementById('hist-mgr-' + id);
+            if (row) {
+                row.classList.toggle('hidden');
+                const panel = row.querySelector('#manage-' + id);
+                if (panel) panel.classList.toggle('hidden');
+            }
         }
         
         document.getElementById('solutionModal').addEventListener('click', function(e) {

@@ -33,6 +33,52 @@ $tech_id = $technician['id'];
 
 $tech_id_safe = $tech_id > 0 ? $tech_id : 0;
 
+require_once '../config/TicketActionService.php';
+$ticket_actions = new TicketActionService();
+$deletions_remaining = $ticket_actions->deletionsRemaining($tech_id);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+    $ticket_id = (int)($_POST['ticket_id'] ?? 0);
+    $result = null;
+
+    if ($action === 'update_status') {
+        $result = $ticket_actions->updateStatus(
+            $ticket_id,
+            $tech_id,
+            $_POST['new_status'] ?? '',
+            $_POST['resolution'] ?? ''
+        );
+    } elseif ($action === 'delete_status_update') {
+        $result = $ticket_actions->deleteStatusUpdate(
+            $ticket_id,
+            $tech_id,
+            (int)($_POST['assignment_id'] ?? 0)
+        );
+    } elseif ($action === 'delete_solution') {
+        $result = $ticket_actions->deleteSolution(
+            $ticket_id,
+            $tech_id,
+            (int)($_POST['history_id'] ?? 0)
+        );
+    } elseif ($action === 'edit_solution') {
+        $result = $ticket_actions->editSolution(
+            (int)($_POST['history_id'] ?? 0),
+            $tech_id,
+            $_POST['solution'] ?? ''
+        );
+    }
+
+    if ($result) {
+        $_SESSION['flash_message'] = $result['success'] ? [true, $result['message']] : [false, $result['message']];
+    }
+    header('Location: dashboard.php');
+    exit;
+}
+
+$flash_message = $_SESSION['flash_message'] ?? null;
+unset($_SESSION['flash_message']);
+
 $stats = [
     'total' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe")->fetch_assoc()['c'] ?? 0,
     'open' => $conn->query("SELECT COUNT(*) as c FROM tickets WHERE assigned_to = $tech_id_safe AND status = 'open'")->fetch_assoc()['c'] ?? 0,
@@ -351,6 +397,12 @@ logActivity('VIEW_TECHNICIAN_DASHBOARD', 'Technician viewed dashboard');
                 </div>
             </div>
             
+            <?php if ($flash_message): ?>
+                <div class="mb-4" style="padding: 0.75rem 1rem; border-radius: 10px; font-size: 0.8rem; <?php echo $flash_message[0] ? 'background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3); color: #00ff88;' : 'background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #ef4444;'; ?>">
+                    <?php echo htmlspecialchars($flash_message[1]); ?>
+                </div>
+            <?php endif; ?>
+            
             <div class="grid grid-cols-3 gap-6">
                 <!-- My Tickets -->
                 <div class="col-span-2">
@@ -387,29 +439,13 @@ logActivity('VIEW_TECHNICIAN_DASHBOARD', 'Technician viewed dashboard');
                                                 <i data-lucide="eye" class="w-3 h-3"></i>
                                                 View
                                             </a>
-                                            <?php if ($ticket['status'] == 'open'): ?>
-                                                <form method="POST" action="technician_update.php" class="inline">
-                                                    <input type="hidden" name="action" value="update_status">
-                                                    <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
-                                                    <input type="hidden" name="new_status" value="in_progress">
-                                                    <button type="submit" class="cyber-btn px-3 py-1 text-xs">
-                                                        <i data-lucide="play" class="w-3 h-3"></i>
-                                                        Start
-                                                    </button>
-                                                </form>
-                                            <?php elseif ($ticket['status'] == 'in_progress'): ?>
-                                                <form method="POST" action="technician_update.php" class="inline">
-                                                    <input type="hidden" name="action" value="update_status">
-                                                    <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
-                                                    <input type="hidden" name="new_status" value="resolved">
-                                                    <button type="submit" class="cyber-btn px-3 py-1 text-xs">
-                                                        <i data-lucide="check" class="w-3 h-3"></i>
-                                                        Resolve
-                                                    </button>
-                                                </form>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
+                                            <button type="button" onclick="toggleManage(<?php echo $ticket['id']; ?>)" class="cyber-btn px-3 py-1 text-xs">
+                                                <i data-lucide="edit" class="w-3 h-3"></i>
+                                                Manage
+                                            </button>
+</div>
+                                    <?php include '_manage_panel.php'; ?>
+                                </div>
                                 <?php endwhile; ?>
                             </div>
                         <?php else: ?>
@@ -494,6 +530,13 @@ logActivity('VIEW_TECHNICIAN_DASHBOARD', 'Technician viewed dashboard');
     
     <script>
         lucide.createIcons();
+
+        function toggleManage(id) {
+            const panel = document.getElementById('manage-' + id);
+            if (panel) {
+                panel.classList.toggle('hidden');
+            }
+        }
     </script>
 </body>
 </html>
