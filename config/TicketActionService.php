@@ -16,21 +16,29 @@
 
 require_once 'database.php';
 require_once 'auth_helper.php';
+require_once 'NotificationService.php';
 
 class TicketActionService {
     const MAX_DELETIONS_PER_DAY = 2;
     const ALLOWED_STATUSES = ['open', 'in_progress', 'resolved'];
 
     private $conn;
+    private $notifications;
 
     public function __construct() {
         $database = new Database();
         $this->conn = $database->getConnection();
+        $this->notifications = new NotificationService();
     }
 
     /**
      * Change the status of a ticket. Resolution text is mandatory.
-     * Records the change on ticket_assignments so it can be reverted later.
+     *
+     * A resolution only exists on a resolved ticket: moving a ticket to
+     * 'resolved' stores the text in fault_history and releases the
+     * technician's workload. Any other status change just records an
+     * action-taken note on ticket_assignments, so the inconsistency
+     * "in progress ticket with a resolution on it" can never occur.
      */
     public function updateStatus($ticket_id, $technician_id, $new_status, $resolution) {
         $resolution = trim($resolution);
@@ -46,7 +54,7 @@ class TicketActionService {
         }
 
         $result = $this->conn->query(
-            "SELECT id, status FROM tickets WHERE id = $ticket_id AND assigned_to = $technician_id"
+            "SELECT id, status, title, created_at FROM tickets WHERE id = $ticket_id AND assigned_to = $technician_id"
         );
         if (!$result || $result->num_rows == 0) {
             return ['success' => false, 'message' => 'Ticket not found or not assigned to you.'];
@@ -60,6 +68,29 @@ class TicketActionService {
         $stmt->execute();
         $stmt->close();
 
+        if ($new_status === 'resolved') {
+            $resolution_time = $this->conn->query(
+                "SELECT TIMESTAMPDIFF(MINUTE, created_at, NOW()) as mins FROM tickets WHERE id = $ticket_id"
+            )->fetch_assoc()['mins'];
+
+            $stmt = $this->conn->prepare(
+                "INSERT INTO fault_history (ticket_id, problem, solution, resolved_by, resolved_at, time_to_resolve)
+                 VALUES (?, ?, ?, ?, NOW(), ?)"
+            );
+            $stmt->bind_param('issii', $ticket_id, $ticket['title'], $resolution, $technician_id, $resolution_time);
+            $stmt->execute();
+            $stmt->close();
+
+            $stmt = $this->conn->prepare(
+                "UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0),
+                 status = CASE WHEN current_workload <= 1 THEN 'available' ELSE status END
+                 WHERE id = ?"
+            );
+            $stmt->bind_param('i', $technician_id);
+            $stmt->execute();
+            $stmt->close();
+        }
+
         $notes = $this->conn->real_escape_string($resolution);
         $stmt = $this->conn->prepare(
             "INSERT INTO ticket_assignments (ticket_id, technician_id, status, notes, previous_status, new_status)
@@ -69,8 +100,12 @@ class TicketActionService {
         $stmt->execute();
         $stmt->close();
 
+        $this->notifications->notifyTicketUpdated($ticket_id, $technician_id, $old_status, $new_status);
+
         logActivity('UPDATE_TICKET_STATUS', "Technician updated ticket #$ticket_id status from $old_status to $new_status");
-        return ['success' => true, 'message' => 'Ticket status updated successfully.'];
+        return ['success' => true, 'message' => $new_status === 'resolved'
+            ? 'Ticket resolved. Resolution has been recorded and the ticket is now marked as resolved.'
+            : 'Ticket status updated successfully.'];
     }
 
     /**
@@ -123,7 +158,21 @@ class TicketActionService {
             "SELECT status FROM tickets WHERE id = $ticket_id"
         )->fetch_assoc();
 
-        if ($isLatest && $ticket && $row['new_status'] === $ticket['status'] && $row['previous_status'] !== null) {
+        // A resolved ticket is only reverted to in_progress when no resolution
+        // (fault_history record) backs it up anymore. Otherwise the deleting
+        // technician would leave a resolution behind on an in_progress ticket.
+        $remaining_resolutions = $this->conn->query(
+            "SELECT COUNT(*) as c FROM fault_history WHERE ticket_id = $ticket_id AND deleted_at IS NULL"
+        )->fetch_assoc();
+        $resolution_still_exists = ((int)($remaining_resolutions['c'] ?? 0) > 0);
+
+        $canRevert = $isLatest
+            && $ticket
+            && $row['new_status'] === $ticket['status']
+            && $row['previous_status'] !== null
+            && !($row['new_status'] === 'resolved' && $resolution_still_exists);
+
+        if ($canRevert) {
             $stmt = $this->conn->prepare("UPDATE tickets SET status = ?, updated_at = NOW() WHERE id = ?");
             $stmt->bind_param('si', $row['previous_status'], $ticket_id);
             $stmt->execute();

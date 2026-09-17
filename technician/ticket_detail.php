@@ -74,6 +74,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if (!in_array($new_status, ['open', 'in_progress', 'resolved', 'closed'])) {
                     $error = 'Invalid status';
+                } elseif ($new_status == 'resolved' && empty($solution)) {
+                    $error = 'You must enter a resolution before marking the ticket as resolved.';
                 } else {
                     $stmt = $conn->prepare("UPDATE tickets SET status = ?, updated_at = NOW() WHERE id = ?");
                     $stmt->bind_param("si", $new_status, $ticket_id);

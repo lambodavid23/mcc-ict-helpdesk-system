@@ -31,8 +31,9 @@ $mp_has_own = false;
             <select name="new_status" style="background: #0f0f15; border: 1px solid #1e293b; color: #e2e8f0; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.75rem; width: 100%;">
                 <option value="open" <?php echo $ticket['status'] == 'open' ? 'selected' : ''; ?>>Open</option>
                 <option value="in_progress" <?php echo $ticket['status'] == 'in_progress' ? 'selected' : ''; ?>>In Progress</option>
+                <option value="resolved">Resolved</option>
             </select>
-            <textarea name="resolution" rows="2" style="background: #0f0f15; border: 1px solid #1e293b; color: #e2e8f0; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.75rem; width: 100%;" placeholder="Resolution / action taken (required)..." required></textarea>
+            <textarea name="resolution" rows="2" style="background: #0f0f15; border: 1px solid #1e293b; color: #e2e8f0; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.75rem; width: 100%;" placeholder="Action taken / resolution - required when marking as Resolved..." required></textarea>
             <button type="submit" class="cyber-btn w-full justify-center text-xs py-1">Save Update</button>
         </form>
         <?php else: ?>
@@ -99,7 +100,7 @@ $mp_has_own = false;
                 <div id="upd-view-<?php echo $mp_u['id']; ?>" class="hidden" style="margin-top: 0.5rem;">
                     <div style="background: #0f0f15; border: 1px solid #1e293b; border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.75rem; color: #e2e8f0; white-space: pre-wrap;">
                         <strong>Status:</strong> <?php echo $mp_u['previous_status'] !== null ? ucfirst($mp_u['previous_status']) . ' &rarr; ' . ucfirst($mp_u['new_status']) : 'Ticket claimed / started'; ?>
-                        <?php if ($mp_u['notes']): ?><br><strong>Resolution:</strong> <?php echo htmlspecialchars($mp_u['notes']); ?><?php else: ?>No resolution notes<?php endif; ?>
+                        <?php if ($mp_u['notes']): ?><br><strong><?php echo $mp_u['new_status'] === 'resolved' ? 'Resolution' : 'Action taken'; ?>:</strong> <?php echo htmlspecialchars($mp_u['notes']); ?><?php else: ?>No resolution notes<?php endif; ?>
                     </div>
                 </div>
             </div>

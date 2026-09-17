@@ -272,6 +272,7 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
                                 <option value="">Select Status</option>
                                 <option value="open" <?php echo $ticket['status'] == 'open' ? 'selected' : ''; ?>>Open</option>
                                 <option value="in_progress" <?php echo $ticket['status'] == 'in_progress' ? 'selected' : ''; ?>>In Progress</option>
+                                <option value="resolved">Resolved</option>
                             </select>
                         </div>
                         <div class="form-group">
