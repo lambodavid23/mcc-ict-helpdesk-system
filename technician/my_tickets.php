@@ -67,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
                         $conn->query("UPDATE tickets SET status = 'resolved' WHERE id = $ticket_id");
                         
                         // Update technician workload
-                        $conn->query("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0) WHERE id = " . $technician['id']);
+                        $conn->query("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0), status = CASE WHEN current_workload >= 4 THEN 'busy' WHEN status = 'offline' THEN 'offline' ELSE 'available' END WHERE id = " . $technician['id']);
                         
                         $success = 'Solution added and ticket marked as resolved';
                         logActivity('ADD_SOLUTION', "Added solution for ticket $ticket_id");

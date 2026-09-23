@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $stmt->close();
                         
                         if ($ticket['assigned_to']) {
-                            $stmt = $conn->prepare("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0) WHERE id = ?");
+                            $stmt = $conn->prepare("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0), status = CASE WHEN current_workload >= 4 THEN 'busy' WHEN status = 'offline' THEN 'offline' ELSE 'available' END WHERE id = ?");
                             $stmt->bind_param("i", $ticket['assigned_to']);
                             $stmt->execute();
                             $stmt->close();

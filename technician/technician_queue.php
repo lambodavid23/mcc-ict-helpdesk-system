@@ -34,6 +34,10 @@ require_once '../config/TicketActionService.php';
 $ticket_actions = new TicketActionService();
 $deletions_remaining = $ticket_actions->deletionsRemaining($tech_id);
 
+require_once '../config/AttendanceService.php';
+$attendance = new AttendanceService();
+$on_duty = $tech_id > 0 && $attendance->isOnDuty($tech_id);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     $ticket_id = (int)($_POST['ticket_id'] ?? 0);
@@ -64,6 +68,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $tech_id,
             $_POST['solution'] ?? ''
         );
+    } elseif ($action === 'clock_in') {
+        if ($tech_id > 0 && $attendance->clockIn($tech_id)) {
+            $result = ['success' => true, 'message' => 'Logged in. You are now on duty and will receive auto-assigned tickets.'];
+            logActivity('TECHNICIAN_CLOCK_IN', "Technician " . $technician['name'] . " clocked in");
+        } else {
+            $result = ['success' => false, 'message' => 'You are already logged in for today.'];
+        }
+    } elseif ($action === 'clock_out') {
+        if ($tech_id > 0 && $attendance->clockOut($tech_id)) {
+            $result = ['success' => true, 'message' => 'Logged out. No new tickets will be auto-assigned until you log in again.'];
+            logActivity('TECHNICIAN_CLOCK_OUT', "Technician " . $technician['name'] . " clocked out");
+        } else {
+            $result = ['success' => false, 'message' => 'You are not currently logged in.'];
+        }
     }
 
     if ($result) {
@@ -281,6 +299,10 @@ logActivity('VIEW_TECHNICIAN_QUEUE', 'Technician viewed their queue');
                     <i data-lucide="history" class="w-4 h-4"></i>
                     History
                 </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
+                </a>
             </nav>
             
             <div class="pt-4 border-t border-[#1a1a2e]">
@@ -294,8 +316,8 @@ logActivity('VIEW_TECHNICIAN_QUEUE', 'Technician viewed their queue');
                     </div>
                 </div>
                 <div class="flex items-center gap-2 mb-2">
-                    <div class="pulse-indicator"></div>
-                    <span class="text-[10px] text-[#00ff88] capitalize"><?php echo $technician['status']; ?></span>
+                    <div class="pulse-indicator" style="<?php echo $on_duty ? '' : 'background: #f59e0b; animation: none; box-shadow: none;'; ?>"></div>
+                    <span class="text-[10px] <?php echo $on_duty ? 'text-[#00ff88]' : 'text-[#f59e0b]'; ?>"><?php echo $on_duty ? 'On Duty' : 'Off Duty'; ?></span>
                 </div>
                 <a href="../auth/logout.php" class="flex items-center gap-2 text-[#666] hover:text-[#ef4444] text-xs transition-colors">
                     <i data-lucide="log-out" class="w-4 h-4"></i>
@@ -322,6 +344,30 @@ logActivity('VIEW_TECHNICIAN_QUEUE', 'Technician viewed their queue');
                     <span class="text-[#ef4444]"><?php echo $stats['open']; ?></span> open
                 </div>
             </header>
+
+            <?php if (!$on_duty): ?>
+            <div class="cyber-card p-4 mb-6" style="border-color: rgba(245, 158, 11, 0.35);">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3);">
+                            <i data-lucide="clock" class="w-5 h-5 text-[#f59e0b]"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-white">You are off duty</p>
+                            <p class="text-[11px] text-[#888] mt-0.5">Log in to start receiving auto-assigned tickets.</p>
+                        </div>
+                    </div>
+                    <form method="POST" class="flex items-center gap-2">
+                        <input type="hidden" name="action" value="clock_in">
+                        <button type="submit" class="cyber-btn">
+                            <i data-lucide="log-in" class="w-4 h-4"></i>
+                            Log In
+                        </button>
+                        <a href="attendance.php" class="cyber-btn-secondary px-3 py-2 text-xs">View Attendance</a>
+                    </form>
+                </div>
+            </div>
+            <?php endif; ?>
             
             <!-- Stats -->
             <div class="grid grid-cols-4 gap-4 mb-6">

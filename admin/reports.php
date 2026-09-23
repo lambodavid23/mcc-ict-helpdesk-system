@@ -237,6 +237,10 @@ logActivity('VIEW_REPORTS', 'Admin viewed reports dashboard');
                     <i data-lucide="headphones" class="w-4 h-4"></i>
                     Technicians
                 </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
+                </a>
                 <a href="reports.php" class="sidebar-item active">
                     <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
                     Reports

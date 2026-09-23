@@ -83,7 +83,11 @@ class TicketActionService {
 
             $stmt = $this->conn->prepare(
                 "UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0),
-                 status = CASE WHEN current_workload <= 1 THEN 'available' ELSE status END
+                 status = CASE 
+                             WHEN current_workload >= 4 THEN 'busy'
+                             WHEN status = 'offline' THEN 'offline'
+                             ELSE 'available'
+                          END
                  WHERE id = ?"
             );
             $stmt->bind_param('i', $technician_id);
@@ -237,7 +241,13 @@ class TicketActionService {
             $stmt->close();
 
             $this->conn->query(
-                "UPDATE technicians SET current_workload = current_workload + 1 WHERE id = $technician_id"
+                "UPDATE technicians SET current_workload = current_workload + 1,
+                 status = CASE 
+                             WHEN current_workload >= 4 THEN 'busy'
+                             WHEN status = 'offline' THEN 'offline'
+                             ELSE 'available'
+                          END
+                 WHERE id = $technician_id"
             );
         }
 

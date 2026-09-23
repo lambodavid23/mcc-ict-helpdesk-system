@@ -69,6 +69,18 @@ CREATE TABLE technicians (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Technician daily attendance (clock in / clock out)
+-- Technicians must clock in each day to be eligible for auto-assignment
+CREATE TABLE technician_attendance (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    technician_id INT NOT NULL,
+    work_date DATE NOT NULL,
+    clock_in DATETIME NOT NULL,
+    clock_out DATETIME NULL,
+    UNIQUE KEY uq_tech_date (technician_id, work_date),
+    CONSTRAINT fk_attendance_technician FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
+);
+
 -- Tickets table
 CREATE TABLE tickets (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -231,6 +243,13 @@ INSERT INTO technicians (name, email, password, specialization, current_workload
 ('Peter Network', 'peter.network@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'network', 3, 'busy', '+263712345680', 'ICT'),
 ('Sarah Software', 'sarah.software@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'software', 0, 'available', '+263712345681', 'ICT');
 
+-- Insert sample attendance for today (on-duty technicians eligible for assignment)
+INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
+(1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
+(2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
+(3, CURDATE(), NOW() - INTERVAL 7 HOUR, NOW() - INTERVAL 1 HOUR),
+(4, CURDATE(), NOW() - INTERVAL 4 HOUR, NULL);
+
 -- Insert sample tickets
 INSERT INTO tickets (title, description, department, category, priority, status, created_by, assigned_to) VALUES
 ('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 3),
@@ -273,6 +292,7 @@ CREATE INDEX idx_tickets_priority ON tickets(priority);
 CREATE INDEX idx_technicians_specialization ON technicians(specialization);
 CREATE INDEX idx_technicians_status ON technicians(status);
 CREATE INDEX idx_technicians_email ON technicians(email);
+CREATE INDEX idx_attendance_technician_date ON technician_attendance(technician_id, work_date);
 CREATE INDEX idx_admins_email ON admins(email);
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_fault_history_ticket_id ON fault_history(ticket_id);

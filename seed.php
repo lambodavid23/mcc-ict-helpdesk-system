@@ -5,7 +5,7 @@ $db = new Database();
 $conn = $db->getConnection();
 
 $conn->query("SET FOREIGN_KEY_CHECKS = 0");
-foreach (['ticket_update_deletions', 'system_logs', 'fault_history', 'ticket_assignments', 'tickets', 'knowledge_base', 'technicians', 'admins', 'users'] as $t) {
+foreach (['ticket_update_deletions', 'system_logs', 'fault_history', 'ticket_assignments', 'tickets', 'knowledge_base', 'technician_attendance', 'technicians', 'admins', 'users'] as $t) {
     $conn->query("DROP TABLE IF EXISTS $t");
 }
 $conn->query("SET FOREIGN_KEY_CHECKS = 1");
@@ -68,6 +68,17 @@ CREATE TABLE technicians (
     phone VARCHAR(20),
     department VARCHAR(100) NOT NULL DEFAULT 'ICT',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
+
+$conn->query("
+CREATE TABLE technician_attendance (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    technician_id INT NOT NULL,
+    work_date DATE NOT NULL,
+    clock_in DATETIME NOT NULL,
+    clock_out DATETIME NULL,
+    UNIQUE KEY uq_tech_date (technician_id, work_date),
+    CONSTRAINT fk_attendance_technician FOREIGN KEY (technician_id) REFERENCES technicians(id) ON DELETE CASCADE
 )");
 
 $conn->query("
@@ -237,6 +248,14 @@ foreach ($techs as $t) {
     $stmt->execute();
 }
 echo "Technicians inserted.\n";
+
+// Today's attendance: John(1), Mary(2), Sarah(4) on duty; Peter(3) has clocked out
+$conn->query("INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
+(1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
+(2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
+(3, CURDATE(), NOW() - INTERVAL 7 HOUR, NOW() - INTERVAL 1 HOUR),
+(4, CURDATE(), NOW() - INTERVAL 4 HOUR, NULL)");
+echo "Technician attendance inserted.\n";
 
 // Assignment rules (technician_id NULL = auto-pick by specialization)
 $conn->query("CREATE TABLE IF NOT EXISTS assignment_rules (

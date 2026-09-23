@@ -7,6 +7,11 @@
 require_once 'database.php';
 
 class AutoAssignmentService {
+    // Workload caps: technicians above the override cap are never candidates,
+    // and a rule-pinned technician must stay under the primary cap.
+    const MAX_WORKLOAD_CAPACITY = 10;
+    const MAX_WORKLOAD_OVERRIDE = 15;
+
     private $conn;
     private $database;
     
@@ -18,19 +23,71 @@ class AutoAssignmentService {
     public function autoAssignTicket($ticket_id) {
         $ticket = $this->getTicket($ticket_id);
         if (!$ticket) return false;
-        
+
         $rule = $this->findBestRule($ticket['category'], $ticket['priority']);
         if (!$rule) return false;
-        
-        if ($rule['technician_id']) {
-            $technician_id = $rule['technician_id'];
-        } else {
-            $technician_id = $this->findBestTechnician($rule['specialization']);
+
+        // The whole pick-and-assign runs inside one transaction with locking
+        // reads so two tickets submitted at the same time can never both grab
+        // the same lowest-workload technician.
+        $this->conn->begin_transaction();
+
+        try {
+            $technician_id = $this->selectTechnician($ticket, $rule);
+
+            if (!$technician_id) {
+                $this->conn->rollback();
+                return false;
+            }
+
+            if (!$this->assignTicket($ticket, $technician_id)) {
+                $this->conn->rollback();
+                return false;
+            }
+
+            $this->conn->commit();
+        } catch (Exception $e) {
+            $this->conn->rollback();
+            error_log("Auto-assignment failed: " . $e->getMessage());
+            return false;
         }
-        
-        if (!$technician_id) return false;
-        
-        return $this->assignTicket($ticket_id, $technician_id);
+
+        $this->notifyTechnician($ticket_id, $technician_id);
+        return true;
+    }
+
+    /**
+     * Choose the technician for a ticket. A rule-pinned technician is only
+     * honored when they are actually eligible (on duty, available and under
+     * the capacity cap); otherwise the normal best-fit search takes over.
+     */
+    private function selectTechnician($ticket, $rule) {
+        $technician_id = (int)$rule['technician_id'];
+
+        if ($technician_id > 0) {
+            $stmt = $this->conn->prepare(
+                "SELECT t.id FROM technicians t
+                 INNER JOIN technician_attendance ta 
+                     ON ta.technician_id = t.id 
+                     AND ta.work_date = CURDATE() 
+                     AND ta.clock_out IS NULL
+                 WHERE t.id = ? 
+                 AND t.status = 'available' 
+                 AND t.current_workload < " . self::MAX_WORKLOAD_CAPACITY . "
+                 FOR UPDATE"
+            );
+            $stmt->bind_param("i", $technician_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $row = $result->fetch_assoc();
+            $stmt->close();
+
+            if ($row) {
+                return (int)$row['id'];
+            }
+        }
+
+        return $this->findBestTechnician($rule['specialization']);
     }
     
     private function getTicket($ticket_id) {
@@ -49,6 +106,7 @@ class AutoAssignmentService {
         $stmt = $this->conn->prepare(
             "SELECT * FROM assignment_rules 
              WHERE is_active = 1 
+             AND auto_assign = 1 
              AND (category = ? OR category = 'all')
              AND (priority = ? OR priority = 'any')
              ORDER BY priority_order ASC
@@ -64,6 +122,7 @@ class AutoAssignmentService {
             $stmt = $this->conn->prepare(
                 "SELECT * FROM assignment_rules 
                  WHERE is_active = 1 
+                 AND auto_assign = 1 
                  AND category = 'general'
                  ORDER BY priority_order ASC
                  LIMIT 1"
@@ -76,16 +135,26 @@ class AutoAssignmentService {
         
         return $rule;
     }
-    
+
+    /**
+     * Best-fit technician search, executed inside the assignment transaction.
+     * FOR UPDATE locks the chosen technician row so concurrent submissions
+     * serialize on workload instead of double-picking the same technician.
+     */
     private function findBestTechnician($specialization) {
         $stmt = $this->conn->prepare(
-            "SELECT id FROM technicians 
-             WHERE status = 'available' 
-             AND (specialization = ? OR specialization = 'general')
-             AND current_workload < 10
-             ORDER BY current_workload ASC, 
-                      specialization = ? DESC
-             LIMIT 1"
+            "SELECT t.id FROM technicians t
+             INNER JOIN technician_attendance ta 
+                 ON ta.technician_id = t.id 
+                 AND ta.work_date = CURDATE() 
+                 AND ta.clock_out IS NULL
+             WHERE t.status = 'available' 
+             AND (t.specialization = ? OR t.specialization = 'general')
+             AND t.current_workload < " . self::MAX_WORKLOAD_CAPACITY . "
+             ORDER BY t.current_workload ASC, 
+                      t.specialization = ? DESC
+             LIMIT 1
+             FOR UPDATE"
         );
         $stmt->bind_param("ss", $specialization, $specialization);
         $stmt->execute();
@@ -94,63 +163,95 @@ class AutoAssignmentService {
         $stmt->close();
         
         if (!$tech) {
+            // Relaxed fallback: also allow busy technicians, but still prefer a
+            // specialization match before load so tickets go to the right skills.
             $stmt = $this->conn->prepare(
-                "SELECT id FROM technicians 
-                 WHERE status IN ('available', 'busy')
-                 AND current_workload < 15
-                 ORDER BY current_workload ASC
-                 LIMIT 1"
+                "SELECT t.id FROM technicians t
+                 INNER JOIN technician_attendance ta 
+                     ON ta.technician_id = t.id 
+                     AND ta.work_date = CURDATE() 
+                     AND ta.clock_out IS NULL
+                 WHERE t.status IN ('available', 'busy')
+                 AND t.current_workload < " . self::MAX_WORKLOAD_OVERRIDE . "
+                 ORDER BY 
+                     CASE WHEN t.specialization = ? THEN 0 ELSE 1 END,
+                     t.current_workload ASC
+                 LIMIT 1
+                 FOR UPDATE"
             );
+            $stmt->bind_param("s", $specialization);
             $stmt->execute();
             $result = $stmt->get_result();
             $tech = $result->fetch_assoc();
             $stmt->close();
         }
         
-        return $tech ? $tech['id'] : null;
+        return $tech ? (int)$tech['id'] : null;
     }
     
-    private function assignTicket($ticket_id, $technician_id) {
-        $this->conn->begin_transaction();
+    private function assignTicket($ticket, $technician_id) {
+        $ticket_id = (int)$ticket['id'];
+        $previous_technician = isset($ticket['assigned_to']) ? (int)$ticket['assigned_to'] : 0;
+
+        $stmt = $this->conn->prepare(
+            "UPDATE tickets 
+             SET assigned_to = ?, status = 'in_progress', updated_at = NOW() 
+             WHERE id = ?"
+        );
+        $stmt->bind_param("ii", $technician_id, $ticket_id);
+        $stmt->execute();
+        $stmt->close();
         
-        try {
-            $stmt = $this->conn->prepare(
-                "UPDATE tickets 
-                 SET assigned_to = ?, status = 'in_progress', updated_at = NOW() 
-                 WHERE id = ?"
-            );
-            $stmt->bind_param("ii", $technician_id, $ticket_id);
-            $stmt->execute();
-            $stmt->close();
-            
+        $stmt = $this->conn->prepare(
+            "UPDATE technicians 
+             SET current_workload = current_workload + 1,
+                 status = CASE 
+                             WHEN current_workload >= 4 THEN 'busy'
+                             WHEN status = 'offline' THEN 'offline'
+                             ELSE 'available'
+                          END
+             WHERE id = ?"
+        );
+        $stmt->bind_param("i", $technician_id);
+        $stmt->execute();
+        $stmt->close();
+
+        // Reassignment: release the previous technician's workload and mark
+        // their old assignment as reassigned.
+        if ($previous_technician > 0 && $previous_technician !== $technician_id) {
             $stmt = $this->conn->prepare(
                 "UPDATE technicians 
-                 SET current_workload = current_workload + 1,
-                     status = CASE WHEN current_workload >= 4 THEN 'busy' ELSE status END
+                 SET current_workload = GREATEST(current_workload - 1, 0),
+                     status = CASE 
+                                 WHEN current_workload >= 4 THEN 'busy'
+                                 WHEN status = 'offline' THEN 'offline'
+                                 ELSE 'available'
+                              END
                  WHERE id = ?"
             );
-            $stmt->bind_param("i", $technician_id);
+            $stmt->bind_param("i", $previous_technician);
             $stmt->execute();
             $stmt->close();
-            
+
             $stmt = $this->conn->prepare(
-                "INSERT INTO ticket_assignments (ticket_id, technician_id, status)
-                 VALUES (?, ?, 'active')"
+                "UPDATE ticket_assignments 
+                 SET status = 'cancelled' 
+                 WHERE ticket_id = ? AND technician_id = ? AND status = 'active'"
             );
-            $stmt->bind_param("ii", $ticket_id, $technician_id);
+            $stmt->bind_param("ii", $ticket_id, $previous_technician);
             $stmt->execute();
             $stmt->close();
-            
-            $this->conn->commit();
-            
-            $this->notifyTechnician($ticket_id, $technician_id);
-            
-            return true;
-        } catch (Exception $e) {
-            $this->conn->rollback();
-            error_log("Auto-assignment failed: " . $e->getMessage());
-            return false;
         }
+        
+        $stmt = $this->conn->prepare(
+            "INSERT INTO ticket_assignments (ticket_id, technician_id, status)
+             VALUES (?, ?, 'active')"
+        );
+        $stmt->bind_param("ii", $ticket_id, $technician_id);
+        $stmt->execute();
+        $stmt->close();
+        
+        return true;
     }
     
     private function notifyTechnician($ticket_id, $technician_id) {

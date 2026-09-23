@@ -8,6 +8,7 @@ A comprehensive web-based ICT support ticket management system for Mutare City C
 - **User Management**: Role-based access control (Admin, Technician, User)
 - **Ticket Management**: Create, assign, track, and resolve support tickets
 - **Automatic Technician Assignment**: Intelligent assignment based on specialization and workload
+- **Technician Daily Attendance**: Clock in/out to mark availability; only on-duty technicians receive assignments
 - **Knowledge Base**: Self-service solutions and documentation
 - **Real-time Dashboard**: Live statistics and performance metrics
 - **Reporting System**: Comprehensive reports and analytics
@@ -135,6 +136,15 @@ The system comes with pre-configured demo accounts:
 - Considers current workload for balanced distribution
 - Prioritizes exact category matches over general technicians
 - Updates workload automatically
+- **Only technicians who are clocked in / on duty for the day are eligible for assignment**
+
+### 1b. Technician Daily Attendance
+- Technicians clock in when their shift starts and clock out when they leave
+- While clocked in they are "On Duty" and receive auto-assigned tickets
+- Clocking out keeps their current tickets but stops new auto-assignment until they clock in again
+- Admin can review daily attendance (who clocked in/out, hours worked) via **Attendance** in the admin panel
+- Technicians can view their own attendance history via **Attendance** in their panel
+- The attendance table (`technician_attendance`) is created automatically on first use, so no manual migration is needed for existing installations
 
 ### 2. Priority System
 - **High**: Server/network outages (2-hour response)

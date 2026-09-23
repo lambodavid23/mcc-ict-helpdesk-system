@@ -391,7 +391,8 @@ function getLucideIcon($iconName, $size = 16, $class = '') {
         'menu' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
         'log-out' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>',
         'lightbulb' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><path d="M15 14c.2-1 .7-1.8 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.1.7 3"/><path d="M9 18h6"/><path d="m10 22 4-6"/><path d="m14 22-4-6"/></svg>',
-        'zap' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+        'zap' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+        'clock' => '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon ' . $class . '"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
     ];
     
     return isset($icons[$iconName]) ? $icons[$iconName] : '';
@@ -407,6 +408,7 @@ function getNavigationMenu($role) {
             ['title' => 'Manage Users', 'url' => 'admin/manage_users.php', 'icon' => 'users'],
             ['title' => 'Manage Technicians', 'url' => 'admin/manage_technicians.php', 'icon' => 'wrench'],
             ['title' => 'All Tickets', 'url' => 'admin/all_tickets.php', 'icon' => 'ticket'],
+            ['title' => 'Attendance', 'url' => 'admin/attendance.php', 'icon' => 'clock'],
             ['title' => 'Reports', 'url' => 'admin/reports.php', 'icon' => 'trending-up'],
             ['title' => 'Knowledge Base', 'url' => 'system/knowledge_base.php', 'icon' => 'book-open']
         ],
@@ -414,6 +416,7 @@ function getNavigationMenu($role) {
             ['title' => 'Dashboard', 'url' => 'technician/dashboard.php', 'icon' => 'bar-chart-3'],
             ['title' => 'My Tickets', 'url' => 'technician/my_tickets.php', 'icon' => 'ticket'],
             ['title' => 'Update Ticket', 'url' => 'technician/update_ticket.php', 'icon' => 'edit'],
+            ['title' => 'Attendance', 'url' => 'technician/attendance.php', 'icon' => 'clock'],
             ['title' => 'Knowledge Base', 'url' => 'system/knowledge_base.php', 'icon' => 'book-open']
         ],
         'user' => [

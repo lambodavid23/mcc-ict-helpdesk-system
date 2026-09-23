@@ -195,6 +195,10 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
                     <i data-lucide="history" class="w-4 h-4"></i>
                     History
                 </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
+                </a>
             </nav>
             
             <div class="pt-4 border-t border-[#1a1a2e]">
@@ -248,6 +252,9 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
                 </div>
             </div>
             
+            <!-- History + AI Assistant side by side -->
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div class="xl:col-span-2">
             <!-- History Table -->
             <div class="cyber-card p-4">
                 <h2 class="text-sm font-semibold text-white mb-4">All Solutions (Every Technician)</h2>
@@ -322,6 +329,13 @@ logActivity('VIEW_TECHNICIAN_HISTORY', 'Technician viewed their history');
                         <p class="text-[#666]">No solutions yet</p>
                     </div>
                 <?php endif; ?>
+            </div>
+            </div>
+
+            <!-- AI Help Assistant (beside history) -->
+            <div class="xl:col-span-1">
+                <?php $ai_ticket = null; include '_ai_assistant_panel.php'; ?>
+            </div>
             </div>
         </main>
     </div>

@@ -53,18 +53,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 break;
                 
             case 'delete_user':
-                $user_id = $_POST['user_id'];
-                
-                if ($user_id == $_SESSION['user_id']) {
-                    $error = 'You cannot delete your own account';
-                } else {
-                    $delete_query = "DELETE FROM users WHERE id = " . (int)$user_id;
-                    if ($conn->query($delete_query)) {
-                        $success = 'User deleted successfully';
-                        logActivity('DELETE_USER', "Deleted user ID: $user_id");
-                    } else {
-                        $error = 'Failed to delete user';
+                $user_id = (int)$_POST['user_id'];
+                $mode = ($_POST['mode'] ?? 'keep_data') === 'all' ? 'all' : 'keep_data';
+
+                $ticket_ids = [];
+                $tq = $conn->query("SELECT id FROM tickets WHERE created_by = $user_id");
+                if ($tq) {
+                    while ($trow = $tq->fetch_assoc()) {
+                        $ticket_ids[] = (int)$trow['id'];
                     }
+                }
+
+                if ($mode === 'all') {
+                    if ($ticket_ids) {
+                        $ids = implode(',', $ticket_ids);
+                        $conn->query("DELETE FROM fault_history WHERE ticket_id IN ($ids)");
+                        $conn->query("DELETE FROM ticket_comments WHERE ticket_id IN ($ids)");
+                        $conn->query("DELETE FROM ticket_attachments WHERE ticket_id IN ($ids)");
+                        $conn->query("DELETE FROM ticket_assignments WHERE ticket_id IN ($ids)");
+                        $conn->query("DELETE FROM notifications WHERE ticket_id IN ($ids)");
+                        $conn->query("DELETE FROM tickets WHERE id IN ($ids)");
+                    }
+                    $conn->query("DELETE FROM notifications WHERE user_type = 'user' AND user_id = $user_id");
+                    $conn->query("DELETE FROM password_resets WHERE user_type = 'user' AND user_id = $user_id");
+                    $conn->query("DELETE FROM remember_tokens WHERE user_type = 'user' AND user_id = $user_id");
+                } else {
+                    $conn->query("UPDATE tickets SET created_by = NULL WHERE created_by = $user_id");
+                }
+
+                if ($conn->query("DELETE FROM users WHERE id = $user_id")) {
+                    $success = ($mode === 'all')
+                        ? 'User and all related data deleted successfully'
+                        : 'User deleted successfully (ticket data kept)';
+                    logActivity('DELETE_USER', "Deleted user ID: $user_id (mode: $mode)");
+                } else {
+                    $error = 'Failed to delete user: ' . $conn->error;
                 }
                 break;
 
@@ -90,23 +113,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
                 break;
 
-            case 'suspend_user':
-                $user_id = (int)$_POST['user_id'];
-                if ($conn->query("UPDATE users SET status = 'suspended' WHERE id = $user_id")) {
-                    $success = 'User suspended successfully';
-                    logActivity('SUSPEND_USER', "Suspended user ID: $user_id");
-                } else {
-                    $error = 'Failed to suspend user';
-                }
-                break;
+            case 'reset_password':
+                $reset_type = ($_POST['account_type'] ?? '') === 'technician' ? 'technician' : 'user';
+                $account_id = (int)($_POST['account_id'] ?? 0);
+                $new_password = (string)($_POST['new_password'] ?? '');
+                $confirm_password = (string)($_POST['confirm_password'] ?? '');
 
-            case 'activate_user':
-                $user_id = (int)$_POST['user_id'];
-                if ($conn->query("UPDATE users SET status = 'active' WHERE id = $user_id")) {
-                    $success = 'User activated successfully';
-                    logActivity('ACTIVATE_USER', "Activated user ID: $user_id");
+                if ($account_id <= 0) {
+                    $error = 'Invalid account';
+                } elseif (strlen($new_password) < 6) {
+                    $error = 'Password must be at least 6 characters';
+                } elseif ($new_password !== $confirm_password) {
+                    $error = 'Passwords do not match';
                 } else {
-                    $error = 'Failed to activate user';
+                    $table = ($reset_type === 'technician') ? 'technicians' : 'users';
+                    $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                    $sql = "UPDATE $table SET password = '" . $conn->real_escape_string($hashed_password) . "' WHERE id = $account_id";
+                    if ($conn->query($sql)) {
+                        $success = ucfirst($reset_type) . ' password reset successfully';
+                        logActivity('RESET_PASSWORD', "Reset password for $reset_type ID: $account_id");
+                    } else {
+                        $error = 'Failed to reset password';
+                    }
                 }
                 break;
         }
@@ -122,6 +150,42 @@ $user_count = $conn->query("SELECT COUNT(*) as total FROM users")->fetch_assoc()
 $tech_count = $conn->query("SELECT COUNT(*) as total FROM technicians")->fetch_assoc()['total'];
 $pending_count = $conn->query("SELECT COUNT(*) as total FROM users WHERE status = 'pending'")->fetch_assoc()['total'];
 $pending_users = $conn->query("SELECT id, name, email, department, pending_expires_at FROM users WHERE status = 'pending' ORDER BY created_at DESC");
+
+$techs = $conn->query("SELECT id, name, email, specialization, current_workload, status, phone, department, created_at FROM technicians ORDER BY created_at DESC");
+
+$user_details = [];
+$ur = $conn->query("SELECT id, name, email, department, status, created_at, pending_expires_at FROM users");
+if ($ur) {
+    while ($u = $ur->fetch_assoc()) {
+        $user_details[(int)$u['id']] = [
+            'ID' => '#' . $u['id'],
+            'Name' => htmlspecialchars($u['name']),
+            'Email' => htmlspecialchars($u['email']),
+            'Department' => htmlspecialchars($u['department']),
+            'Status' => htmlspecialchars(ucfirst($u['status'])),
+            'Created' => date('M d, Y H:i', strtotime($u['created_at'])),
+            'Request expires' => !empty($u['pending_expires_at']) ? date('M d, Y H:i', strtotime($u['pending_expires_at'])) : '—',
+        ];
+    }
+}
+
+$tech_details = [];
+$tr = $conn->query("SELECT id, name, email, specialization, current_workload, status, phone, department, created_at FROM technicians");
+if ($tr) {
+    while ($t = $tr->fetch_assoc()) {
+        $tech_details[(int)$t['id']] = [
+            'ID' => '#' . $t['id'],
+            'Name' => htmlspecialchars($t['name']),
+            'Email' => htmlspecialchars($t['email']),
+            'Specialization' => htmlspecialchars(ucfirst($t['specialization'])),
+            'Workload' => htmlspecialchars($t['current_workload']),
+            'Status' => htmlspecialchars(ucfirst($t['status'])),
+            'Phone' => !empty($t['phone']) ? htmlspecialchars($t['phone']) : '—',
+            'Department' => htmlspecialchars($t['department']),
+            'Created' => date('M d, Y H:i', strtotime($t['created_at'])),
+        ];
+    }
+}
 
 logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
 ?>
@@ -288,6 +352,10 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                 <a href="manage_technicians.php" class="sidebar-item">
                     <i data-lucide="headphones" class="w-4 h-4"></i>
                     Technicians
+                </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
                 </a>
                 <a href="reports.php" class="sidebar-item">
                     <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
@@ -536,8 +604,13 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                         <td><?php echo $status_badge; ?></td>
                                         <td class="text-[#666] text-xs"><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
                                         <td>
-                                            <?php if ($user['id'] != $_SESSION['user_id']): ?>
-                                                <?php if ($user['status'] == 'pending'): ?>
+                                            <button type="button" class="cyber-btn px-2 py-1 text-xs" style="background:transparent;border:1px solid #1a1a2e;color:#666;" onclick="showDetail('user', <?php echo (int)$user['id']; ?>)" title="View details">
+                                                <i data-lucide="eye" class="w-3 h-3"></i>
+                                            </button>
+                                            <button type="button" class="cyber-btn px-2 py-1 text-xs" style="background:transparent;border:1px solid #1a1a2e;color:#fbbf24;" onclick="resetPass('user', <?php echo (int)$user['id']; ?>, <?php echo htmlspecialchars(json_encode($user['name']), ENT_QUOTES); ?>)" title="Reset password">
+                                                <i data-lucide="key" class="w-3 h-3"></i>
+                                            </button>
+                                            <?php if ($user['status'] == 'pending'): ?>
                                                     <form method="POST" class="inline">
                                                         <input type="hidden" name="action" value="approve_user">
                                                         <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
@@ -546,34 +619,9 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                                         </button>
                                                     </form>
                                                 <?php endif; ?>
-                                                <?php if ($user['status'] == 'active'): ?>
-                                                    <form method="POST" class="inline" onsubmit="return confirm('Suspend this user?')">
-                                                        <input type="hidden" name="action" value="suspend_user">
-                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                        <button type="submit" class="cyber-btn px-2 py-1 text-xs" style="background: linear-gradient(135deg,#fbbf24,#f59e0b); color:#050507;" title="Suspend">
-                                                            <i data-lucide="pause" class="w-3 h-3"></i>
-                                                        </button>
-                                                    </form>
-                                                <?php endif; ?>
-                                                <?php if ($user['status'] == 'suspended'): ?>
-                                                    <form method="POST" class="inline">
-                                                        <input type="hidden" name="action" value="activate_user">
-                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                        <button type="submit" class="cyber-btn px-2 py-1 text-xs" title="Activate">
-                                                            <i data-lucide="play" class="w-3 h-3"></i>
-                                                        </button>
-                                                    </form>
-                                                <?php endif; ?>
-                                                <form method="POST" class="inline ml-1" onsubmit="return confirm('Delete this user?')">
-                                                    <input type="hidden" name="action" value="delete_user">
-                                                    <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                    <button type="submit" class="cyber-btn-danger px-2 py-1 text-xs">
-                                                        <i data-lucide="trash-2" class="w-3 h-3"></i>
-                                                    </button>
-                                                </form>
-                                            <?php else: ?>
-                                                <span class="text-[#444] text-xs">Current User</span>
-                                            <?php endif; ?>
+                                                <button type="button" class="cyber-btn-danger px-2 py-1 text-xs" onclick="askDelete(<?php echo (int)$user['id']; ?>, <?php echo htmlspecialchars(json_encode($user['name']), ENT_QUOTES); ?>)" title="Delete user">
+                                                    <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                                </button>
                                         </td>
                                     </tr>
                                 <?php endwhile; ?>
@@ -591,12 +639,198 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                     </table>
                 </div>
             </div>
+
+            <!-- Technician Accounts -->
+            <div class="cyber-card p-4 mt-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+                        <i data-lucide="headphones" class="w-4 h-4 text-[#60a5fa]"></i>
+                        Technicians (<?php echo $techs ? $techs->num_rows : 0; ?>)
+                    </h2>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="cyber-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Specialization</th>
+                                <th>Status</th>
+                                <th>Workload</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if ($techs && $techs->num_rows > 0): ?>
+                                <?php while ($tech = $techs->fetch_assoc()): ?>
+                                    <?php
+                                        $tech_badge = '<span class="badge badge-user">available</span>';
+                                        if ($tech['status'] === 'busy') {
+                                            $tech_badge = '<span class="badge" style="background:rgba(251,191,36,0.15);color:#fbbf24;">busy</span>';
+                                        } elseif ($tech['status'] === 'offline') {
+                                            $tech_badge = '<span class="badge badge-suspended">offline</span>';
+                                        }
+                                    ?>
+                                    <tr>
+                                        <td class="text-[#60a5fa] font-mono">#<?php echo $tech['id']; ?></td>
+                                        <td class="text-white font-medium"><?php echo htmlspecialchars($tech['name']); ?></td>
+                                        <td class="text-[#ccc]"><?php echo htmlspecialchars($tech['email']); ?></td>
+                                        <td class="text-[#ccc] capitalize"><?php echo htmlspecialchars($tech['specialization']); ?></td>
+                                        <td><?php echo $tech_badge; ?></td>
+                                        <td class="text-[#ccc]"><?php echo (int)$tech['current_workload']; ?>/10</td>
+                                        <td>
+                                            <button type="button" class="cyber-btn px-2 py-1 text-xs" style="background:transparent;border:1px solid #1a1a2e;color:#666;" onclick="showDetail('tech', <?php echo (int)$tech['id']; ?>)" title="View details">
+                                                <i data-lucide="eye" class="w-3 h-3"></i>
+                                            </button>
+                                            <button type="button" class="cyber-btn px-2 py-1 text-xs" style="background:transparent;border:1px solid #1a1a2e;color:#fbbf24;" onclick="resetPass('tech', <?php echo (int)$tech['id']; ?>, <?php echo htmlspecialchars(json_encode($tech['name']), ENT_QUOTES); ?>)" title="Reset password">
+                                                <i data-lucide="key" class="w-3 h-3"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                <?php endwhile; ?>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="7" class="text-center text-[#666] py-8">No technicians found</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </main>
     </div>
     
+    <!-- Account Details Modal -->
+    <div id="detailModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70" onclick="if(event.target===this) closeModal('detailModal')">
+        <div class="cyber-card w-full max-w-md p-6 mx-4">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-semibold text-white">Account Details</h3>
+                <button type="button" onclick="closeModal('detailModal')" class="text-[#666] hover:text-white">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div id="detailBody" class="space-y-3 text-sm"></div>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div id="resetModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70" onclick="if(event.target===this) closeModal('resetModal')">
+        <form method="POST" class="cyber-card w-full max-w-md p-6 mx-4">
+            <div class="flex items-center justify-between mb-1">
+                <h3 class="text-sm font-semibold text-white">Reset Password</h3>
+                <button type="button" onclick="closeModal('resetModal')" class="text-[#666] hover:text-white">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <p id="resetMeta" class="text-[#666] text-xs mb-4"></p>
+            <input type="hidden" name="action" value="reset_password">
+            <input type="hidden" name="account_type" id="resetType">
+            <input type="hidden" name="account_id" id="resetId">
+            <div class="mb-3">
+                <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">New Password</label>
+                <input type="password" name="new_password" id="resetPass1" class="cyber-input" minlength="6" required placeholder="At least 6 characters">
+            </div>
+            <div class="mb-4">
+                <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Confirm Password</label>
+                <input type="password" name="confirm_password" id="resetPass2" class="cyber-input" minlength="6" required placeholder="Repeat password">
+            </div>
+            <p id="resetMatchMsg" class="hidden text-[#ef4444] text-[11px] mb-3">Passwords do not match.</p>
+            <div class="flex justify-end gap-2">
+                <button type="button" onclick="closeModal('resetModal')" class="cyber-btn cyber-btn-secondary px-4">Cancel</button>
+                <button type="submit" class="cyber-btn">
+                    <i data-lucide="key" class="w-4 h-4"></i> Save New Password
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Delete User Modal -->
+    <div id="deleteModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70" onclick="if(event.target===this) closeModal('deleteModal')">
+        <div class="cyber-card w-full max-w-md p-6 mx-4">
+            <div class="flex items-center justify-between mb-1">
+                <h3 class="text-sm font-semibold text-white">Delete User</h3>
+                <button type="button" onclick="closeModal('deleteModal')" class="text-[#666] hover:text-white">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <p id="deleteMeta" class="text-[#666] text-xs mb-3"></p>
+            <p class="text-[#ccc] text-sm mb-4">What should happen to this user's tickets?</p>
+            <div class="flex flex-col gap-2">
+                <form method="POST">
+                    <input type="hidden" name="action" value="delete_user">
+                    <input type="hidden" name="mode" value="keep_data">
+                    <input type="hidden" name="user_id" id="deleteKeepId">
+                    <button type="submit" class="cyber-btn w-full justify-center">
+                        <i data-lucide="archive" class="w-4 h-4"></i> Keep data &amp; delete account
+                    </button>
+                </form>
+                <form method="POST">
+                    <input type="hidden" name="action" value="delete_user">
+                    <input type="hidden" name="mode" value="all">
+                    <input type="hidden" name="user_id" id="deleteAllId">
+                    <button type="submit" class="cyber-btn-danger w-full justify-center">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i> Delete account &amp; everything
+                    </button>
+                </form>
+                <button type="button" onclick="closeModal('deleteModal')" class="cyber-btn cyber-btn-secondary px-4 w-full justify-center">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         lucide.createIcons();
+
+        var userDetails = <?php echo json_encode($user_details); ?>;
+        var techDetails = <?php echo json_encode($tech_details); ?>;
+
+        function closeModal(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        function showDetail(type, id) {
+            var d = type === 'tech' ? techDetails[id] : userDetails[id];
+            if (!d) return;
+            var html = Object.keys(d).map(function (k) {
+                return '<div class="flex items-start justify-between gap-4 border-b border-[#0f0f15] pb-2">' +
+                    '<span class="text-[#666] text-xs uppercase tracking-wider pt-0.5">' + k + '</span>' +
+                    '<span class="text-[#ccc] text-right">' + d[k] + '</span></div>';
+            }).join('');
+            document.getElementById('detailBody').innerHTML = html;
+            document.getElementById('detailModal').classList.remove('hidden');
+        }
+
+        function resetPass(type, id, name) {
+            document.getElementById('resetType').value = type;
+            document.getElementById('resetId').value = id;
+            document.getElementById('resetMeta').textContent = 'Reset password for ' + name;
+            document.getElementById('resetPass1').value = '';
+            document.getElementById('resetPass2').value = '';
+            document.getElementById('resetMatchMsg').classList.add('hidden');
+            document.getElementById('resetModal').classList.remove('hidden');
+        }
+
+        function checkResetMatch() {
+            var p1 = document.getElementById('resetPass1').value;
+            var p2 = document.getElementById('resetPass2').value;
+            var msg = document.getElementById('resetMatchMsg');
+            if (p1 === p2) { msg.classList.add('hidden'); return true; }
+            msg.classList.remove('hidden');
+            return false;
+        }
+        document.getElementById('resetPass1').addEventListener('input', checkResetMatch);
+        document.getElementById('resetPass2').addEventListener('input', checkResetMatch);
+        document.getElementById('resetModal').addEventListener('submit', function (e) {
+            if (!checkResetMatch()) { e.preventDefault(); }
+        });
         
+        function askDelete(id, name) {
+            document.getElementById('deleteKeepId').value = id;
+            document.getElementById('deleteAllId').value = id;
+            document.getElementById('deleteMeta').textContent = 'You are about to delete ' + name + '.';
+            document.getElementById('deleteModal').classList.remove('hidden');
+        }
+
         function filterTable() {
             const input = document.getElementById('searchUsers');
             const filter = input.value.toLowerCase();

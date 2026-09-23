@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
                 $stmt->execute();
                 $stmt->close();
                 
-                $stmt = $conn->prepare("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0), status = CASE WHEN current_workload <= 1 THEN 'available' ELSE status END WHERE id = ?");
+                $stmt = $conn->prepare("UPDATE technicians SET current_workload = GREATEST(current_workload - 1, 0), status = CASE WHEN current_workload >= 4 THEN 'busy' WHEN status = 'offline' THEN 'offline' ELSE 'available' END WHERE id = ?");
                 $stmt->bind_param("i", $tech_id);
                 $stmt->execute();
                 $stmt->close();

@@ -6,6 +6,10 @@
 
 require_once '../config/database.php';
 
+// Ensure the technician_attendance table exists (on-duty availability for assignment)
+require_once '../config/AttendanceService.php';
+new AttendanceService();
+
 /**
  * Automatically assign a technician to a new ticket
  * @param int $ticket_id The ID of the ticket to assign
@@ -24,7 +28,7 @@ function autoAssignTechnician($ticket_id, $category) {
         // Find the best technician based on:
         // 1. Specialization match (exact category match preferred over general)
         // 2. Current workload (lowest first)
-        // 3. Availability status
+        // 3. Availability status (must be checked in / on duty for today)
         
         $assignment_query = "
             SELECT t.id, t.name, t.current_workload, t.status,
@@ -34,6 +38,10 @@ function autoAssignTechnician($ticket_id, $category) {
                        ELSE 3
                    END as specialization_priority
             FROM technicians t
+            INNER JOIN technician_attendance ta 
+                ON ta.technician_id = t.id 
+                AND ta.work_date = CURDATE() 
+                AND ta.clock_out IS NULL
             WHERE t.status = 'available'
             ORDER BY 
                 specialization_priority ASC,
@@ -52,6 +60,14 @@ function autoAssignTechnician($ticket_id, $category) {
             $conn->begin_transaction();
             
             try {
+                // Remember who currently holds this ticket so their workload can be
+                // released if this is a reassignment.
+                $old_tech_id = 0;
+                $old_tech_result = $conn->query("SELECT assigned_to FROM tickets WHERE id = $ticket_id");
+                if ($old_tech_result && $old_tech_result->num_rows > 0) {
+                    $old_tech_id = (int)$old_tech_result->fetch_assoc()['assigned_to'];
+                }
+                
                 // Update ticket with assigned technician
                 $update_ticket_query = "
                     UPDATE tickets 
@@ -69,6 +85,7 @@ function autoAssignTechnician($ticket_id, $category) {
                     SET current_workload = current_workload + 1,
                         status = CASE 
                                     WHEN current_workload >= 4 THEN 'busy'
+                                    WHEN status = 'offline' THEN 'offline'
                                     ELSE 'available'
                                  END
                     WHERE id = $tech_id
@@ -76,6 +93,25 @@ function autoAssignTechnician($ticket_id, $category) {
                 
                 if (!$conn->query($update_tech_query)) {
                     throw new Exception("Failed to update technician workload");
+                }
+                
+                // Release the previous technician (reassignment case) so workload
+                // counters stay accurate and no technician is unfairly skipped.
+                if ($old_tech_id > 0 && $old_tech_id != $tech_id) {
+                    $release_query = "
+                        UPDATE technicians 
+                        SET current_workload = GREATEST(current_workload - 1, 0),
+                            status = CASE 
+                                        WHEN current_workload >= 4 THEN 'busy'
+                                        WHEN status = 'offline' THEN 'offline'
+                                        ELSE 'available'
+                                     END
+                        WHERE id = $old_tech_id
+                    ";
+                    
+                    if (!$conn->query($release_query)) {
+                        throw new Exception("Failed to release previous technician workload");
+                    }
                 }
                 
                 // Create assignment record

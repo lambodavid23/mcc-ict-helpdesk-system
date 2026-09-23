@@ -22,8 +22,9 @@ $stats['resolved_tickets'] = $result->fetch_assoc()['total'];
 $result = $conn->query("SELECT COUNT(*) as total FROM technicians");
 $stats['total_technicians'] = $result->fetch_assoc()['total'];
 
-$result = $conn->query("SELECT COUNT(*) as total FROM technicians WHERE status = 'available'");
-$stats['available_technicians'] = $result->fetch_assoc()['total'];
+require_once '../config/AttendanceService.php';
+$attendance = new AttendanceService();
+$stats['on_duty_technicians'] = $attendance->getOnDutyCount();
 
 $result = $conn->query("SELECT COUNT(*) as total FROM users");
 $stats['total_users'] = $result->fetch_assoc()['total'];
@@ -248,6 +249,10 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
                     <i data-lucide="headphones" class="w-4 h-4"></i>
                     Technicians
                 </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
+                </a>
                 <a href="reports.php" class="sidebar-item">
                     <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
                     Reports
@@ -280,9 +285,15 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
                     <h1 class="text-xl font-bold text-white glow-text">Dashboard</h1>
                     <p class="text-xs text-[#666] mt-0.5">System overview and analytics</p>
                 </div>
-                <div class="flex items-center gap-2 text-xs text-[#666]">
-                    <div class="pulse-indicator"></div>
-                    <span>System Online</span>
+                <div class="flex items-center gap-3">
+                    <button type="button" onclick="location.reload()" class="cyber-btn px-3 py-1.5" title="Refresh dashboard">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                        Refresh
+                    </button>
+                    <div class="flex items-center gap-2 text-xs text-[#666]">
+                        <div class="pulse-indicator"></div>
+                        <span>System Online</span>
+                    </div>
                 </div>
             </header>
             
@@ -364,8 +375,8 @@ logActivity('VIEW_ADMIN_DASHBOARD', 'Admin viewed dashboard');
                 <div class="cyber-card p-4">
                     <div class="flex items-start justify-between">
                         <div>
-                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">Technicians</p>
-                            <p class="text-2xl font-bold text-white"><?php echo $stats['available_technicians']; ?><span class="text-sm text-[#666] font-normal">/<?php echo $stats['total_technicians']; ?></span></p>
+                            <p class="text-[10px] text-[#666] uppercase tracking-wider mb-1">Technicians On Duty</p>
+                            <p class="text-2xl font-bold text-white"><?php echo $stats['on_duty_technicians']; ?><span class="text-sm text-[#666] font-normal">/<?php echo $stats['total_technicians']; ?></span></p>
                         </div>
                         <div class="stat-icon" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.2);">
                             <i data-lucide="headphones" class="w-5 h-5 text-[#f59e0b]"></i>
