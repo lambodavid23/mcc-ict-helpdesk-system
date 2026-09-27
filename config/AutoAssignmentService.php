@@ -14,13 +14,30 @@ class AutoAssignmentService {
 
     private $conn;
     private $database;
-    
+
+    /**
+     * Technician picked by the most recent successful autoAssignTicket() call.
+     * submit_ticket.php assigns before replying but flushes the email after,
+     * so it needs a way to ask who was picked and to notify them later.
+     */
+    private $last_assigned_technician_id = null;
+
     public function __construct() {
         $this->database = new Database();
         $this->conn = $this->database->getConnection();
     }
     
-    public function autoAssignTicket($ticket_id) {
+    /**
+     * Assign a technician to a ticket.
+     *
+     * $notify sends the "ticket assigned" notification, which includes a
+     * blocking mail() call (~2s when no mailserver is listening). Callers that
+     * need the assignment committed before they respond should pass false and
+     * then call flushAssignmentNotification() once the response is on the wire.
+     */
+    public function autoAssignTicket($ticket_id, $notify = true) {
+        $this->last_assigned_technician_id = null;
+
         $ticket = $this->getTicket($ticket_id);
         if (!$ticket) return false;
 
@@ -52,8 +69,50 @@ class AutoAssignmentService {
             return false;
         }
 
-        $this->notifyTechnician($ticket_id, $technician_id);
+        $this->last_assigned_technician_id = $technician_id;
+
+        if ($notify) {
+            $this->notifyTechnician($ticket_id, $technician_id);
+        }
+
         return true;
+    }
+
+    /**
+     * Send the deferred "ticket assigned" notification for the technician
+     * chosen by the last successful autoAssignTicket($id, false) call.
+     */
+    public function flushAssignmentNotification($ticket_id) {
+        if (empty($this->last_assigned_technician_id)) {
+            return false;
+        }
+
+        $this->notifyTechnician($ticket_id, $this->last_assigned_technician_id);
+        return true;
+    }
+
+    /**
+     * The technician currently on a ticket, as ['id' => int, 'name' => string],
+     * or null when the ticket is unassigned.
+     */
+    public function getAssignedTechnician($ticket_id) {
+        $stmt = $this->conn->prepare(
+            "SELECT tech.id, tech.name
+             FROM tickets t
+             LEFT JOIN technicians tech ON t.assigned_to = tech.id
+             WHERE t.id = ?"
+        );
+        $stmt->bind_param("i", $ticket_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = $result->fetch_assoc();
+        $stmt->close();
+
+        if (!$row || empty($row['id'])) {
+            return null;
+        }
+
+        return ['id' => (int)$row['id'], 'name' => $row['name']];
     }
 
     /**

@@ -145,7 +145,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
             }
             
-            $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id . '. You will receive an email notification when a technician is assigned.';
+            // Commit the assignment *before* replying. This used to run after
+            // the response had been flushed, so the browser could reload My
+            // Requests before the ticket was assigned and the "Assigned To"
+            // column read "Pending". Notify is deferred because it does a
+            // blocking mail() (~2s with no mailserver), which would otherwise
+            // be added straight onto the response.
+            $is_assigned = $auto_assign->autoAssignTicket($ticket_id, false);
+            $assigned = $is_assigned ? $auto_assign->getAssignedTechnician($ticket_id) : null;
+            $assigned_name = $assigned['name'] ?? null;
+
+            if ($assigned_name) {
+                $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id
+                         . '. It has been assigned to ' . $assigned_name . '.';
+            } else {
+                $success = 'Ticket submitted successfully! Your ticket ID is #' . $ticket_id . '. You will receive an email notification when a technician is assigned.';
+            }
             
             if ($is_ajax) {
                 ignore_user_abort(true);
@@ -153,19 +168,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 if (ob_get_level()) ob_clean();
                 header('Content-Type: application/json');
                 header('Connection: close');
-                $json = json_encode(['status' => 'success', 'message' => $success, 'ticket_id' => $ticket_id]);
+                $json = json_encode([
+                    'status'        => 'success',
+                    'message'       => $success,
+                    'ticket_id'     => $ticket_id,
+                    'assigned'      => (bool)$assigned_name,
+                    'assigned_name' => $assigned_name,
+                    'ticket_status' => $assigned_name ? 'in_progress' : 'open'
+                ]);
                 header('Content-Length: ' . strlen($json));
                 echo $json;
                 ob_flush();
                 flush();
                 
-                $auto_assign->autoAssignTicket($ticket_id);
+                // Slow work, response already on the wire.
+                $auto_assign->flushAssignmentNotification($ticket_id);
                 $notifications->notifyTicketCreated($ticket_id, $created_by);
                 logActivity('SUBMIT_TICKET', "Submitted ticket: $title");
                 exit;
             }
             
-            $auto_assign->autoAssignTicket($ticket_id);
+            $auto_assign->autoAssignTicket($ticket_id, false);
+            $auto_assign->flushAssignmentNotification($ticket_id);
             $notifications->notifyTicketCreated($ticket_id, $created_by);
             logActivity('SUBMIT_TICKET', "Submitted ticket: $title");
             $_POST = [];
@@ -470,6 +494,36 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
         .toast-icon {
             flex-shrink: 0;
         }
+        .toast-body {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+        .toast-detail {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            opacity: 0.85;
+        }
+        .toast-detail strong {
+            font-weight: 600;
+        }
+        .toast-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 2px;
+            font-size: 12px;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            opacity: 0.9;
+            width: fit-content;
+        }
+        .toast-link:hover {
+            opacity: 1;
+        }
     </style>
 </head>
 <body class="min-h-screen grid-bg">
@@ -679,13 +733,17 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
         lucide.createIcons();
         
         function showToast(message, type) {
+            showHtmlToast('<span>' + message + '</span>', type);
+        }
+        
+        function showHtmlToast(innerHtml, type) {
             const container = document.getElementById('toastContainer');
             const icons = { success: 'check-circle', error: 'alert-circle', info: 'info' };
             
             const toast = document.createElement('div');
             toast.className = 'toast toast-' + type;
             toast.innerHTML = '<i data-lucide="' + (icons[type] || 'info') + '" class="w-5 h-5 toast-icon"></i>'
-                + '<span>' + message + '</span>'
+                + '<div class="toast-body">' + innerHtml + '</div>'
                 + '<button class="toast-close" onclick="this.parentElement.remove()"><i data-lucide="x" class="w-4 h-4"></i></button>';
             
             container.appendChild(toast);
@@ -721,7 +779,22 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
             .then(function(res) { return res.json(); })
             .then(function(data) {
                 if (data.status === 'success') {
-                    showToast(data.message, 'success');
+                    // The assignment is already committed server-side by the time
+                    // this response arrives, so show who got it straight away
+                    // instead of leaving the user to find "Pending" later.
+                    let html = '<span>' + data.message + '</span>';
+
+                    if (data.assigned && data.assigned_name) {
+                        html += '<span class="toast-detail">'
+                            + '<i data-lucide="user-check" class="w-3.5 h-3.5"></i>'
+                            + 'Assigned to <strong>' + data.assigned_name + '</strong>'
+                            + '</span>';
+                    }
+
+                    html += '<a class="toast-link" href="my_requests.php">View in My Requests'
+                        + '<i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>';
+
+                    showHtmlToast(html, 'success');
                     form.reset();
                     lucide.createIcons();
                 } else {
