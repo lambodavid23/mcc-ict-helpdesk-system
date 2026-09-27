@@ -2,15 +2,22 @@
 require_once '../config/auth_helper.php';
 require_once '../config/database.php';
 require_once '../config/NotificationService.php';
-require_once '../config/AutoAssignmentService.php';
+
+// This page had no requireLogin() at all, and the ownership check further down
+// was written as "$user_role == 'user' && ...", which an anonymous visitor
+// skipped entirely (null == 'user' is false). Net effect: anyone could read
+// any ticket by id, and any logged-in user could assign themselves a
+// technician via the assign_technician action.
+requireLogin();
 
 $database = new Database();
 $conn = $database->getConnection();
 $notifications = new NotificationService();
-$auto_assign = new AutoAssignmentService();
 
 $user_id = $_SESSION['user_id'];
 $user_role = $_SESSION['user_role'];
+$is_admin = ($user_role === 'admin');
+$is_staff = in_array($user_role, ['admin', 'technician'], true);
 $ticket_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if (!$ticket_id) {
@@ -30,7 +37,9 @@ if (!$ticket) {
     exit();
 }
 
-if ($user_role == 'user' && $ticket['created_by'] != $user_id) {
+// Staff legitimately open any ticket from the queue; a user may only open
+// their own. Checked for everyone, not just role 'user'.
+if (!$is_staff && (int)$ticket['created_by'] !== (int)$user_id) {
     $_SESSION['error'] = 'Access denied';
     header('Location: dashboard.php');
     exit();
@@ -40,7 +49,13 @@ $success = '';
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    if (isset($_POST['action'])) {
+    // Every mutating action below is CSRF protected. Previously a forged
+    // cross-site POST could change status, comment, assign a technician or
+    // write an upload using only the victim's session cookie.
+    $csrf_ok = validateCSRFToken($_POST['csrf_token'] ?? '');
+    if (!$csrf_ok) {
+        $error = 'Your session expired or the request could not be verified. Reload the page and try again.';
+    } elseif (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'add_comment':
                 $comment = trim($_POST['comment']);
@@ -48,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if (empty($comment)) {
                     $error = 'Comment cannot be empty';
-                } elseif ($is_internal && !in_array($user_role, ['admin', 'technician'])) {
+                } elseif ($is_internal && !$is_staff) {
                     $error = 'Only technicians and admins can add internal notes';
                 } else {
                     $comment_escaped = $conn->real_escape_string($comment);
@@ -71,7 +86,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $new_status = $_POST['new_status'];
                 $solution = isset($_POST['solution']) ? trim($_POST['solution']) : '';
                 $old_status = $ticket['status'];
-                
+
+                // A user may only acknowledge and close their own resolved
+                // ticket. Without this, any user could POST new_status=resolved
+                // with an invented solution, or push a ticket back to
+                // in_progress and cancel out the technician's real work.
+                if (!$is_staff) {
+                    if ($new_status !== 'closed' || $old_status !== 'resolved') {
+                        $error = 'You can only close a ticket once it has been resolved.';
+                        break;
+                    }
+                }
+
                 if (!in_array($new_status, ['open', 'in_progress', 'resolved', 'closed'])) {
                     $error = 'Invalid status';
                 } elseif ($new_status == 'resolved' && empty($solution)) {
@@ -114,6 +140,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 break;
                 
             case 'assign_technician':
+                // Previously ungated: the admin check existed only on the form,
+                // so a plain user could POST this and assign any technician to
+                // their own ticket, bumping that technician's workload by 1 on
+                // every repeat call.
+                if (!$is_admin) {
+                    $error = 'Only administrators can change the assigned technician.';
+                    break;
+                }
+
                 $technician_id = (int)$_POST['technician_id'];
                 
                 if ($technician_id > 0) {
@@ -142,7 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
     
-    if (isset($_FILES['attachment']) && $_FILES['attachment']['error'] == 0) {
+    if ($csrf_ok && isset($_FILES['attachment']) && $_FILES['attachment']['error'] == 0) {
         $file = $_FILES['attachment'];
         $allowed = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'txt', 'zip'];
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
@@ -450,9 +485,10 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                         
                         <!-- Add Comment Form -->
                         <form method="POST" class="mt-4 pt-4 border-t border-[#1a1a2e]">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="add_comment">
                             <textarea name="comment" class="cyber-textarea" placeholder="Add a comment..." required></textarea>
-                            <?php if (in_array($user_role, ['admin', 'technician'])): ?>
+                            <?php if ($is_staff): ?>
                                 <label class="flex items-center gap-2 mt-2 text-xs text-[#666] cursor-pointer">
                                     <input type="checkbox" name="is_internal" class="w-4 h-4 accent-[#00ff88]">
                                     Internal note (only visible to staff)
@@ -472,8 +508,9 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                     <div class="cyber-card p-4">
                         <h3 class="text-sm font-semibold text-white mb-4">Status & Actions</h3>
                         
-                        <?php if ($user_role != 'user'): ?>
+                        <?php if ($is_staff): ?>
                         <form method="POST" class="mb-4">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="update_status">
                             <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Update Status</label>
                             <select name="new_status" class="cyber-select mb-2">
@@ -489,8 +526,9 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                         </form>
                         <?php endif; ?>
                         
-                        <?php if ($user_role == 'user' && $ticket['status'] == 'resolved'): ?>
+                        <?php if (!$is_staff && $ticket['status'] == 'resolved'): ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="update_status">
                             <input type="hidden" name="new_status" value="closed">
                             <button type="submit" class="cyber-btn w-full justify-center">
@@ -502,10 +540,11 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                     </div>
                     
                     <!-- Assignment -->
-                    <?php if ($user_role == 'admin'): ?>
+                    <?php if ($is_admin): ?>
                     <div class="cyber-card p-4">
                         <h3 class="text-sm font-semibold text-white mb-4">Assign Technician</h3>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="assign_technician">
                             <select name="technician_id" class="cyber-select mb-3">
                                 <option value="">-- Select Technician --</option>
@@ -554,6 +593,7 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                     <div class="cyber-card p-4">
                         <h3 class="text-sm font-semibold text-white mb-4">Upload File</h3>
                         <form method="POST" enctype="multipart/form-data">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="file" name="attachment" class="text-xs text-[#ccc] file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#00ff88] file:text-[#050507] file:cursor-pointer file:font-semibold">
                             <p class="text-[10px] text-[#444] mt-1">Max 5MB. Images, PDF, Docs allowed.</p>
                             <button type="submit" class="cyber-btn-secondary w-full justify-center mt-3">

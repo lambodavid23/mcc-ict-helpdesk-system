@@ -207,6 +207,40 @@ class NotificationService {
             'Ticket #' . $ticket_id . ' Assigned',
             'A new ticket has been assigned to you. Please review and begin work.'
         );
+
+        // The submitter is told "You will receive an email notification when a
+        // technician is assigned", but only the technician was ever notified,
+        // so that promise was never kept. Look up who raised the ticket and
+        // tell them too.
+        $stmt = $this->conn->prepare("SELECT created_by FROM tickets WHERE id = ?");
+        $stmt->bind_param("i", $ticket_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $ticket = $result->fetch_assoc();
+        $stmt->close();
+
+        if (!$ticket || empty($ticket['created_by'])) {
+            return;
+        }
+
+        $stmt = $this->conn->prepare("SELECT name FROM technicians WHERE id = ?");
+        $stmt->bind_param("i", $technician_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $tech = $result->fetch_assoc();
+        $stmt->close();
+        $tech_name = $tech['name'] ?? null;
+
+        $this->createNotification(
+            (int)$ticket['created_by'],
+            'user',
+            $ticket_id,
+            'ticket_assigned',
+            'Ticket #' . $ticket_id . ' Assigned',
+            $tech_name
+                ? "A technician ($tech_name) has been assigned to your ticket."
+                : 'A technician has been assigned to your ticket.'
+        );
     }
     
     public function notifyTicketUpdated($ticket_id, $updated_by, $old_status, $new_status) {
