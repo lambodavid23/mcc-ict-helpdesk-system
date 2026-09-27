@@ -207,20 +207,36 @@ function updateUserPassword($userType, $userId, $newPassword) {
  * Log user activity
  */
 function logActivity($action, $description = '') {
-    if (isLoggedIn()) {
-        require_once 'database.php';
+    if (!isLoggedIn()) {
+        return;
+    }
+
+    require_once 'database.php';
+
+    // Reused across calls: logActivity() runs on most write actions, and
+    // opening a fresh connection each time is pure overhead.
+    static $conn = null;
+    if ($conn === null) {
         $database = new Database();
         $conn = $database->getConnection();
-        
-        $user_id = $_SESSION['user_id'];
-        $user_type = isset($_SESSION['user_role']) ? $_SESSION['user_role'] : 'user';
-        $ip_address = $_SERVER['REMOTE_ADDR'];
-        $user_agent = $_SERVER['HTTP_USER_AGENT'];
-        $description = $conn->real_escape_string($description);
-        
-        $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
-                     VALUES ('$user_id', '$user_type', '$action', '$description', '$ip_address', '$user_agent')";
-        $conn->query($log_query);
+    }
+
+    $user_id    = $_SESSION['user_id'];
+    $user_type  = isset($_SESSION['user_role']) ? $_SESSION['user_role'] : 'user';
+    $ip_address = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+    // Absent for non-browser clients; was previously interpolated raw, which
+    // let a crafted User-Agent header inject SQL.
+    $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 255) : '';
+
+    $stmt = $conn->prepare(
+        "INSERT INTO system_logs
+            (user_id, user_type, action, description, ip_address, user_agent)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    if ($stmt) {
+        $stmt->bind_param('isssss', $user_id, $user_type, $action, $description, $ip_address, $user_agent);
+        $stmt->execute();
+        $stmt->close();
     }
 }
 
@@ -414,12 +430,13 @@ function getNavigationMenu($role) {
         ],
         'technician' => [
             ['title' => 'Dashboard', 'url' => 'technician/dashboard.php', 'icon' => 'bar-chart-3'],
-            ['title' => 'My Tickets', 'url' => 'technician/my_tickets.php', 'icon' => 'ticket'],
-            ['title' => 'Update Ticket', 'url' => 'technician/update_ticket.php', 'icon' => 'edit'],
+            ['title' => 'Ticket Queue', 'url' => 'technician/technician_queue.php', 'icon' => 'ticket'],
+            ['title' => 'My History', 'url' => 'technician/technician_history.php', 'icon' => 'clipboard-list'],
             ['title' => 'Attendance', 'url' => 'technician/attendance.php', 'icon' => 'clock'],
             ['title' => 'Knowledge Base', 'url' => 'system/knowledge_base.php', 'icon' => 'book-open']
         ],
         'user' => [
+            ['title' => 'Dashboard', 'url' => 'user/dashboard.php', 'icon' => 'bar-chart-3'],
             ['title' => 'Submit Ticket', 'url' => 'user/submit_ticket.php', 'icon' => 'plus'],
             ['title' => 'My Requests', 'url' => 'user/my_requests.php', 'icon' => 'clipboard-list'],
             ['title' => 'Knowledge Base', 'url' => 'system/knowledge_base.php', 'icon' => 'book-open']

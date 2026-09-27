@@ -4,6 +4,14 @@ require_once '../config/database.php';
 require_once '../config/NotificationService.php';
 require_once '../config/AutoAssignmentService.php';
 
+// This page was previously reachable without any authentication check.
+requireLogin();
+if (!in_array($_SESSION['user_role'] ?? '', ['technician', 'admin'], true)) {
+    $_SESSION['error'] = 'Access denied. You do not have permission to access this page.';
+    header('Location: ../index.php');
+    exit();
+}
+
 $database = new Database();
 $conn = $database->getConnection();
 $notifications = new NotificationService();
@@ -30,17 +38,29 @@ if (!$ticket) {
     exit();
 }
 
-if ($user_role == 'user' && $ticket['created_by'] != $user_id) {
-    $_SESSION['error'] = 'Access denied';
-    header('Location: dashboard.php');
-    exit();
-}
+// Technicians legitimately need to *view* tickets that are not assigned to
+// them: the queue lists unassigned work matching their specialisation, and
+// recent-comment links point at any ticket. So viewing is open to any signed
+// in technician or admin - what used to be missing entirely is the
+// authentication check above. Write actions are gated separately below.
+$is_admin     = ($user_role === 'admin');
+$is_assigned  = ((int)$ticket['assigned_to'] === (int)$user_id);
+$can_write    = $is_admin || $is_assigned;
 
 $success = '';
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    if (isset($_POST['action'])) {
+    $csrf_ok = validateCSRFToken($_POST['csrf_token'] ?? '');
+    if (!$csrf_ok) {
+        $error = 'Your session expired or the request could not be verified. Reload the page and try again.';
+    } elseif (isset($_POST['action'])) {
+        // Writes are restricted to the assigned technician (or an admin).
+        // Viewing stays open so unassigned queue work can still be inspected.
+        $writeActions = ['add_comment', 'update_status'];
+        if (in_array($_POST['action'], $writeActions, true) && !$can_write) {
+            $error = 'This ticket is not assigned to you. Ask an administrator to assign it to you first.';
+        } else {
         switch ($_POST['action']) {
             case 'add_comment':
                 $comment = trim($_POST['comment']);
@@ -114,6 +134,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 break;
                 
             case 'assign_technician':
+                // Only admins may assign or reassign work.
+                if ($user_role !== 'admin') {
+                    $error = 'Only administrators can change the assigned technician.';
+                    break;
+                }
                 $technician_id = (int)$_POST['technician_id'];
                 
                 if ($technician_id > 0) {
@@ -140,9 +165,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
                 break;
         }
+        }
     }
-    
-    if (isset($_FILES['attachment']) && $_FILES['attachment']['error'] == 0) {
+
+    if ($csrf_ok && $can_write && isset($_FILES['attachment']) && $_FILES['attachment']['error'] == 0) {
         $file = $_FILES['attachment'];
         $allowed = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'txt', 'zip'];
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
@@ -329,13 +355,21 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                     <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
                     Dashboard
                 </a>
-                <a href="submit_ticket.php" class="sidebar-item">
-                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
-                    New Ticket
+                <a href="technician_queue.php" class="sidebar-item">
+                    <i data-lucide="inbox" class="w-4 h-4"></i>
+                    Ticket Queue
                 </a>
-                <a href="my_requests.php" class="sidebar-item">
+                <a href="technician_history.php" class="sidebar-item">
                     <i data-lucide="list" class="w-4 h-4"></i>
-                    My Requests
+                    My History
+                </a>
+                <a href="attendance.php" class="sidebar-item">
+                    <i data-lucide="clock" class="w-4 h-4"></i>
+                    Attendance
+                </a>
+                <a href="../system/knowledge_base.php" class="sidebar-item">
+                    <i data-lucide="book-open" class="w-4 h-4"></i>
+                    Knowledge Base
                 </a>
             </nav>
             
@@ -370,7 +404,16 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                     <?php echo $error; ?>
                 </div>
             <?php endif; ?>
-            
+
+            <?php if (!$can_write): ?>
+                <div class="alert flex items-center gap-2"
+                     style="background: rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.35); color:#fbbf24;">
+                    <i data-lucide="eye" class="w-4 h-4"></i>
+                    Read-only - this ticket is not assigned to you, so comments, status
+                    updates and uploads are disabled.
+                </div>
+            <?php endif; ?>
+
             <div class="flex items-center justify-between mb-6">
                 <div>
                     <a href="<?php echo $user_role == 'user' ? 'my_requests.php' : ($user_role == 'technician' ? 'technician_queue.php' : 'all_tickets.php'); ?>" class="text-[#666] hover:text-[#00ff88] text-xs flex items-center gap-1 mb-2">
@@ -449,7 +492,9 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                         <?php endif; ?>
                         
                         <!-- Add Comment Form -->
+                        <?php if ($can_write): ?>
                         <form method="POST" class="mt-4 pt-4 border-t border-[#1a1a2e]">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="add_comment">
                             <textarea name="comment" class="cyber-textarea" placeholder="Add a comment..." required></textarea>
                             <?php if (in_array($user_role, ['admin', 'technician'])): ?>
@@ -463,6 +508,7 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                                 Post Comment
                             </button>
                         </form>
+                        <?php endif; ?>
                     </div>
                 </div>
                 
@@ -490,8 +536,9 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                             </div>
                         </div>
                         
-                        <?php if ($user_role != 'user'): ?>
+                        <?php if ($can_write): ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="update_status">
                             <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Change Status To</label>
                             <select name="new_status" class="cyber-select mb-3">
@@ -513,6 +560,7 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                         
                         <?php if ($user_role == 'user' && $ticket['status'] == 'resolved'): ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="update_status">
                             <input type="hidden" name="new_status" value="closed">
                             <button type="submit" class="cyber-btn w-full justify-center">
@@ -534,6 +582,7 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                             Assign Technician
                         </h3>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="hidden" name="action" value="assign_technician">
                             <select name="technician_id" class="cyber-select mb-3">
                                 <option value="">-- Select Technician --</option>
@@ -587,7 +636,9 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                             <i data-lucide="upload" class="w-4 h-4 text-[#00ff88]"></i>
                             Upload File
                         </h3>
+                        <?php if ($can_write): ?>
                         <form method="POST" enctype="multipart/form-data">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <input type="file" name="attachment" class="text-xs text-[#ccc] file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#00ff88] file:text-[#050507] file:cursor-pointer file:font-semibold">
                             <p class="text-[10px] text-[#444] mt-1">Max 5MB. Images, PDF, Docs allowed.</p>
                             <button type="submit" class="cyber-btn-secondary w-full justify-center mt-3">
@@ -595,6 +646,7 @@ logActivity('VIEW_TICKET', "Viewed ticket #$ticket_id");
                                 Upload
                             </button>
                         </form>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
