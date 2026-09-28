@@ -65,9 +65,9 @@ logActivity('VIEW_TECHNICIAN_ATTENDANCE', 'Technician viewed their attendance');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Attendance - MCC ICT Helpdesk</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/tailwind.css">
+    <link rel="stylesheet" href="../assets/fonts/fonts.css">
+    <script src="../assets/js/lucide.js"></script>
     <style>
         * { font-family: 'Space Grotesk', sans-serif; }
         body { background: #050507; }
@@ -331,7 +331,7 @@ logActivity('VIEW_TECHNICIAN_ATTENDANCE', 'Technician viewed their attendance');
     </div>
     
     <script>
-        lucide.createIcons();
+        if (window.lucide) lucide.createIcons();
     </script>
 </body>
 </html>

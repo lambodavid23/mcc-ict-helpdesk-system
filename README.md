@@ -20,10 +20,35 @@ A comprehensive web-based ICT support ticket management system for Mutare City C
 
 ## Technical Stack
 
-- **Frontend**: HTML5, CSS3 (with custom dark theme), JavaScript
+- **Frontend**: HTML5, CSS3 (Tailwind CSS compiled locally + custom dark theme), JavaScript
 - **Backend**: PHP 7.4+ (procedural style)
 - **Database**: MySQL 5.7+
 - **Environment**: XAMPP (Apache + MySQL + PHP)
+
+### Runs fully offline
+
+The application makes **no outbound network requests**. Tailwind CSS, the Lucide
+icon set and both webfonts are vendored into `assets/`, so the UI renders and
+behaves identically with no internet connection.
+
+| Asset | Source | Vendored to |
+| --- | --- | --- |
+| Tailwind CSS | `tailwindcss` (dev dependency) | `assets/css/tailwind.css` |
+| Lucide icons | `lucide` (dev dependency) | `assets/js/lucide.js` |
+| Space Grotesk | Google Fonts | `assets/fonts/` |
+| Plus Jakarta Sans | Google Fonts | `assets/fonts/` |
+
+The generated files are committed, so **Node.js is only needed if you want to
+rebuild them** — for example after adding new pages or new `data-lucide` icons.
+
+```bash
+npm install
+npm run build        # css + icons + fonts
+npm run watch:css    # rebuild Tailwind while editing
+```
+
+`npm run build:fonts` is the only step that touches the internet. After adding a
+new icon to a page, run `npm run build:icons` so it is included in the bundle.
 
 ## Project Structure
 
@@ -54,11 +79,18 @@ A comprehensive web-based ICT support ticket management system for Mutare City C
 │   └── knowledge_base.php    # Knowledge base system
 ├── assets/
 │   ├── css/
-│   │   └── style.css         # Main stylesheet
+│   │   ├── style.css         # Legacy stylesheet (3 pages)
+│   │   └── tailwind.css      # Compiled Tailwind (generated)
 │   ├── js/
-│   │   └── script.js         # JavaScript functions
+│   │   ├── script.js         # JavaScript functions
+│   │   └── lucide.js         # Vendored icon subset (generated)
+│   ├── fonts/                # Self-hosted webfonts (generated)
 │   └── images/
 │       └── mutarelogo.png    # MCC Logo
+├── scripts/                  # Asset build scripts (Node)
+├── src/                      # Tailwind source stylesheet
+├── tailwind.config.js        # Tailwind content globs
+├── package.json              # Build scripts
 ├── index.php                 # Entry point
 ├── database.sql              # Database schema and sample data
 └── README.md                 # This file
@@ -84,6 +116,14 @@ A comprehensive web-based ICT support ticket management system for Mutare City C
    - Click "Import" tab
    - Choose `database.sql` file
    - Click "Go"
+4. Import `config/migrations/baseline_data.sql` the same way. This adds the
+   staff accounts, the auto-assignment rules, and the knowledge base articles
+   the AI assistant relies on. It is safe to re-run and will not duplicate rows.
+
+> **Never open `seed.php` in a browser.** It drops the core tables and
+> recreates them with demo data, destroying all tickets and accounts. It is now
+> restricted to the command line and requires an explicit opt-in:
+> `set SEED_ALLOW=1 && php seed.php`
 
 ### Step 3: Deploy Application
 1. Copy the entire project folder to `C:\xampp\htdocs\mcc-ict-helpdesk\`
@@ -106,28 +146,27 @@ A comprehensive web-based ICT support ticket management system for Mutare City C
 
 ## Default Login Credentials
 
-The system comes with pre-configured demo accounts:
+All accounts below are created by `config/migrations/baseline_data.sql` with
+the password `password`. **Change every one of them before real use.**
 
 ### Admin Account
 - **Email**: admin@mcc.co.zw
-- **Password**: password
 
 ### Technician Accounts
-- **Email**: john.tech@mcc.co.zw
-- **Password**: password
+| Specialization | Email |
+| --- | --- |
+| Network | JoseLambo@mcc.co.zw |
+| Hardware | MaryTambo@mcc.co.zw |
+| Software | PeterNcube@mcc.co.zw |
+| General | SarahZhou@mcc.co.zw |
 
-- **Email**: mary.hardware@mcc.co.zw
-- **Password**: password
-
-- **Email**: peter.network@mcc.co.zw
-- **Password**: password
-
-- **Email**: sarah.software@mcc.co.zw
-- **Password**: password
-
-### User Account
-- **Email**: user@mcc.co.zw
-- **Password**: password
+### User Accounts
+| Email | Department |
+| --- | --- |
+| IanSmith@mcc.co.zw | ICT |
+| AliceMoyo@mcc.co.zw | Finance |
+| BobChikore@mcc.co.zw | Registry |
+| ChenaiDube@mcc.co.zw | Housing |
 
 ## System Features in Detail
 
@@ -186,6 +225,15 @@ Regularly backup the database using:
 mysqldump -u root -p mcc_helpdesk > backup.sql
 ```
 
+This is the only way to recover tickets and accounts. Binary logging is enabled
+in `mysql/bin/my.ini`, so MariaDB can also replay changes to a point in time:
+```sql
+SHOW BINARY LOGS;
+mysqlbinlog --start-datetime="2026-09-27 14:00:00" mysql-bin.000004 \
+  | mysql -u root -p mcc_helpdesk
+```
+Binlogs are kept for 7 days. Delete the files in `mysql/data/` to reclaim space.
+
 ### Log Monitoring
 Check system logs in the `system_logs` table for:
 - Login attempts
@@ -237,6 +285,9 @@ PHP errors are logged to:
 - Edit `assets/css/style.css`
 - Modify color variables
 - Update logo in `assets/images/`
+- Colours/classes from the Tailwind utilities used in the pages are built into
+  `assets/css/tailwind.css` — edit `tailwind.config.js` (or add to the page
+  markup) and run `npm run build:css` to regenerate
 
 ### Email Notifications
 To add email notifications:

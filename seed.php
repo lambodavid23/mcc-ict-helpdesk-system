@@ -1,8 +1,39 @@
 <?php
+/**
+ * DESTRUCTIVE development seeder.
+ *
+ * This file DROPs the core tables and recreates them with demo data, which
+ * destroys all live tickets, staff accounts and resolutions. It must never be
+ * reachable from a browser.
+ *
+ * Run it from the command line only:
+ *   php seed.php
+ *
+ * To run it you must also define SEED_ALLOW, so that an accidental web request
+ * cannot trigger it:
+ *   set SEED_ALLOW=1 && php seed.php   (Windows cmd)
+ *   SEED_ALLOW=1 php seed.php           (Linux/macOS/Git Bash)
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    header('Content-Type: text/plain');
+    echo "403 Forbidden: seed.php is a command-line tool and cannot be run over the web.\n";
+    exit;
+}
+
+if (getenv('SEED_ALLOW') !== '1') {
+    fwrite(STDERR, "Refusing to run. This DROPs tables and destroys live data.\n");
+    fwrite(STDERR, "Set SEED_ALLOW=1 if you really mean it, e.g.:\n");
+    fwrite(STDERR, "  set SEED_ALLOW=1 && php seed.php\n");
+    exit(1);
+}
+
 require_once __DIR__ . '/config/database.php';
 
 $db = new Database();
 $conn = $db->getConnection();
+
+fwrite(STDOUT, "WARNING: dropping and recreating core tables. Live data will be lost.\n");
 
 $conn->query("SET FOREIGN_KEY_CHECKS = 0");
 foreach (['ticket_update_deletions', 'system_logs', 'fault_history', 'ticket_assignments', 'tickets', 'knowledge_base', 'technician_attendance', 'technicians', 'admins', 'users'] as $t) {

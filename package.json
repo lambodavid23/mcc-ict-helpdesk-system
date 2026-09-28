@@ -1,0 +1,29 @@
+{
+  "name": "mcc-ict-helpdesk-system",
+  "version": "1.0.0",
+  "description": "A comprehensive web-based ICT support ticket management system for Mutare City Council ICT Department.",
+  "main": "index.js",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/tailwind.css -o ./assets/css/tailwind.css --minify",
+    "build:icons": "node ./scripts/build-icons.mjs",
+    "build:fonts": "node ./scripts/build-fonts.mjs",
+    "build": "npm run build:css && npm run build:icons && npm run build:fonts",
+    "watch:css": "tailwindcss -i ./src/tailwind.css -o ./assets/css/tailwind.css --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lambodavid23/mcc-ict-helpdesk-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/lambodavid23/mcc-ict-helpdesk-system/issues"
+  },
+  "homepage": "https://github.com/lambodavid23/mcc-ict-helpdesk-system#readme",
+  "devDependencies": {
+    "lucide": "^0.475.0",
+    "tailwindcss": "^3.4.17"
+  }
+}

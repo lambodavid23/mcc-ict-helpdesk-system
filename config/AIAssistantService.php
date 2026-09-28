@@ -461,6 +461,16 @@ class AIAssistantService {
             return strcmp($bt, $at);
         });
 
+        // Reject incidental matches. A score of 1-2 means a single token hit in
+        // the weak field only (a solution body), which happens to share a common
+        // word like "correct" or "error" with the query. Those are noise, not a
+        // relevant past case. A score of 3 is one real hit in the strong field
+        // (problem text or article keyword), or a strong category agreement.
+        $MIN_SCORE = 3;
+        $scored    = array_values(array_filter($scored, function ($r) use ($MIN_SCORE) {
+            return (int)$r['score'] >= $MIN_SCORE;
+        }));
+
         $clean = [];
         foreach (array_slice($scored, 0, max(1, (int)$limit)) as $r) {
             $clean[] = [
@@ -697,9 +707,23 @@ class AIAssistantService {
             return strlen($b) - strlen($a);
         });
 
+        // Words that appear in almost any helpdesk ticket, whatever the fault.
+        // "office" in "the office WiFi" says nothing about an Office-suite
+        // problem, so these never trigger a signal on their own.
+        $ambiguous = array_flip([
+            'office', 'install', 'update', 'crash', 'permission', 'login', 'ip', 'lan',
+        ]);
+
         foreach ($keys as $key) {
             $s = $this->signals[$key];
-            if (isset($seen[$s[0]]) || strpos($hay, $key) === false) {
+            if (isset($seen[$s[0]]) || isset($ambiguous[$key])) {
+                continue;
+            }
+            // Match on whole words only. A bare substring test fires on
+            // "office" inside "the office WiFi in Registry", which then adds
+            // the Office-suite checklist to a wireless fault.
+            $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($key, '/') . '(?![\p{L}\p{N}])/u';
+            if (!preg_match($pattern, $hay)) {
                 continue;
             }
             $seen[$s[0]] = true;
@@ -745,8 +769,8 @@ class AIAssistantService {
             $L[] = '- ' . $guide['cause'];
         }
         foreach ($top as $s) {
-            $L[] = '- Recurring: ' . $s['title'] . '  [' . $s['category']
-                 . ($s['source'] === 'past' ? ', closed in a similar ticket' : ', knowledge base') . ']';
+            $ref = $s['source'] === 'past' ? 'closed in Ticket #' . $s['ticket_id'] : 'knowledge base';
+            $L[] = '- Recurring: ' . $s['title'] . '  [' . $s['category'] . ', ' . $ref . ']';
         }
 
         $L[] = '';
@@ -762,7 +786,8 @@ class AIAssistantService {
             $L[] = ($n++ + 1) . ') ' . $step;
         }
         foreach ($top as $s) {
-            $L[] = ($n++ + 1) . ') Compare against Ticket #' . $s['ticket_id'] . ': ' . $s['title']
+            $ref = $s['source'] === 'past' ? 'Ticket #' . $s['ticket_id'] : 'knowledge base';
+            $L[] = ($n++ + 1) . ') Compare against the ' . $ref . ' entry: ' . $s['title']
                  . '  [matched on: ' . implode(', ', $s['matched']) . ']';
         }
 
@@ -882,11 +907,27 @@ class AIAssistantService {
             if (stripos($p, 'resolution for') === 0 || stripos($p, 'steps to') === 0) {
                 continue;
             }
-            $out[] = '- ' . $p;
+            // Knowledge base entries and free-text resolutions are often one
+            // prose paragraph rather than a list. Split a long run of sentences
+            // so each becomes its own actionable step instead of one wall of
+            // text. Short fragments are left alone so genuine list items that
+            // happen to contain a full stop are not chopped mid-sentence.
+            if (substr_count($p, '. ') >= 1 && strlen($p) > 90) {
+                $sentences = preg_split('/(?<=\.)\s+(?=[A-Z])/', $p, -1, PREG_SPLIT_NO_EMPTY);
+                foreach ($sentences as $s) {
+                    $s = trim($s, " \t-.\r\n");
+                    if ($s !== '') {
+                        $out[] = '- ' . $s;
+                    }
+                }
+            } else {
+                $out[] = '- ' . $p;
+            }
             if (count($out) >= 5) {
                 break;
             }
         }
+        $out = array_slice($out, 0, 5);
 
         return $out ?: ['- ' . trim(preg_replace('/\s+/', ' ', $text))];
     }
@@ -1000,6 +1041,16 @@ class AIAssistantService {
             'when','how','what','why','where','who','it','there','then','than','of','at','on','in','by',
             'also','just','like','every','some','any','much','many','after','before','because','user',
             'users','please','unable','cannot','issue','problem','complain','complaint',
+            // Vague wording that appears in almost every ticket and article.
+            // Left in, a single hit on one of these outranks or pollutes a
+            // genuine match on the actual fault.
+            'correct','wrong','right','good','bad','error','errors','failed','fails','fail',
+            'thing','things','staff','member','employee','computer','machine','device','system',
+            'working','work','works','network','office','floor','since','still','keep','keeps',
+            'trying','try','close','check','checking','see','saw','new','one','two','way',
+            // Present in so many network article titles that they match each
+            // other rather than the reported fault.
+            'access','point','remote','join','dropping',
         ];
         $words = preg_split('/[^a-z0-9]+/', strtolower((string)$text), -1, PREG_SPLIT_NO_EMPTY);
         $tokens = [];

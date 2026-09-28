@@ -52,9 +52,9 @@ if (!empty($token)) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reset Password - MCC ICT Helpdesk</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/tailwind.css">
+    <link rel="stylesheet" href="../assets/fonts/fonts.css">
+    <script src="../assets/js/lucide.js"></script>
     <style>
         * { font-family: 'Space Grotesk', sans-serif; }
         body { background: #050507; }
@@ -160,20 +160,20 @@ if (!empty($token)) {
     </div>
 
     <script>
-        lucide.createIcons();
+        if (window.lucide) lucide.createIcons();
         function togglePwd() {
             const pwd = document.getElementById('password');
             const btn = document.getElementById('eyeBtn');
             if (pwd.type === 'password') { pwd.type = 'text'; btn.setAttribute('data-lucide', 'eye-off'); }
             else { pwd.type = 'password'; btn.setAttribute('data-lucide', 'eye'); }
-            lucide.createIcons();
+            if (window.lucide) lucide.createIcons();
         }
         function toggleConfirm() {
             const pwd = document.getElementById('confirmPwd');
             const btn = document.getElementById('eyeBtn2');
             if (pwd.type === 'password') { pwd.type = 'text'; btn.setAttribute('data-lucide', 'eye-off'); }
             else { pwd.type = 'password'; btn.setAttribute('data-lucide', 'eye'); }
-            lucide.createIcons();
+            if (window.lucide) lucide.createIcons();
         }
     </script>
 </body>
