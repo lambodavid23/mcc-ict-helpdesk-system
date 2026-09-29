@@ -86,6 +86,19 @@ function detectCategory($text) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    // Without a token, any site could file tickets into the queue on behalf
+    // of a logged-in user, or write an upload into their account.
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+        if ($is_ajax) {
+            // The submit handler parses the response as JSON, so a rejection
+            // has to be JSON too or it surfaces as a generic network error.
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'error', 'message' => $error]);
+            exit;
+        }
+    } else {
     $title = trim($_POST['title']);
     $description = trim($_POST['description']);
     $category = detectCategory($title . ' ' . $description);
@@ -196,6 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         } else {
             $error = 'Failed to submit ticket. Please try again.';
         }
+    }
     }
 }
 
@@ -639,6 +653,7 @@ logActivity('VIEW_SUBMIT_TICKET', 'User viewed ticket submission page');
                         <h2 class="text-base font-semibold text-white mb-6">Ticket Details</h2>
                         
                         <form method="POST" action="" enctype="multipart/form-data" id="ticketForm">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                             <div class="mb-4">
                                 <label class="cyber-label">Problem / Issue Title <span>*</span></label>
                                 <div class="relative">

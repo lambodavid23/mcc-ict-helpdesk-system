@@ -5,11 +5,162 @@
  */
 
 // Start session if not already started
-if (session_status() == PHP_SESSION_NONE) {
+// headers_sent() guards the whole block: auth_helper.php is normally the first
+// include, but if a page ever emits output first, session_start() would emit
+// warnings straight into the response and corrupt a JSON payload.
+if (session_status() == PHP_SESSION_NONE && !headers_sent()) {
+    // Harden the session cookie before the session is created, so the flags
+    // apply to the id this request goes on to use. It previously inherited
+    // php.ini defaults, and XAMPP ships session.cookie_httponly off.
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+          || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path'     => '/',
+        'secure'   => $https || getenv('MCC_COOKIE_SECURE') === '1',
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    // Reject session ids the server never issued, so a planted id cannot be
+    // adopted and then inherited after login.
+    ini_set('session.use_strict_mode', '1');
+    session_start();
+} elseif (session_status() == PHP_SESSION_NONE) {
+    // Output already started. Start the session without the cookie hardening
+    // rather than emitting warnings into the response body.
     session_start();
 }
 
+// Baseline response headers. Referrer-Policy matters here in particular:
+// password reset links carry their token in the query string, and without this
+// the token leaks to any third party the user clicks through to.
+if (!headers_sent()) {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: no-referrer');
+}
+
 restoreRememberedUser();
+
+/**
+ * Maximum failed logins allowed per IP inside the throttle window.
+ */
+const LOGIN_MAX_FAILURES = 5;
+
+/**
+ * Seconds a locked-out IP must wait before trying again.
+ */
+const LOGIN_LOCKOUT_SECONDS = 900;
+
+/**
+ * Whether this IP is still inside its failed-login lockout.
+ *
+ * There was no throttle at all, which combined with the seeded default
+ * passwords made every account in the system indefinitely brute-forceable.
+ */
+function loginAllowed($ip, $conn) {
+    if ($ip === '' || !loginThrottleReady($conn)) {
+        return true;
+    }
+    $stmt = $conn->prepare(
+        "SELECT COUNT(*) AS attempts FROM login_attempts
+         WHERE ip_address = ? AND attempted_at > (NOW() - INTERVAL ? SECOND)"
+    );
+    $window = LOGIN_LOCKOUT_SECONDS;
+    $stmt->bind_param('si', $ip, $window);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result ? $result->fetch_assoc() : null;
+    $stmt->close();
+    return !$row || (int)$row['attempts'] < LOGIN_MAX_FAILURES;
+}
+
+/**
+ * Record a failed login for this IP.
+ */
+function recordLoginFailure($ip, $conn) {
+    if ($ip === '' || !loginThrottleReady($conn)) {
+        return;
+    }
+    $stmt = $conn->prepare(
+        "INSERT INTO login_attempts (ip_address, attempted_at) VALUES (?, NOW())"
+    );
+    $stmt->bind_param('s', $ip);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/**
+ * Clear the failure count for this IP after a successful login.
+ */
+function clearLoginFailures($ip, $conn) {
+    if ($ip === '' || !loginThrottleReady($conn)) {
+        return;
+    }
+    $stmt = $conn->prepare("DELETE FROM login_attempts WHERE ip_address = ?");
+    $stmt->bind_param('s', $ip);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/**
+ * The throttle table is created by a migration and may not be present yet on
+ * an older database. Failing open keeps login working; it never turns a
+ * database error into a locked-out user.
+ */
+function loginThrottleReady($conn) {
+    static $ready = null;
+    if ($ready === null) {
+        $ready = (bool)$conn->query(
+            "SHOW TABLES LIKE 'login_attempts'"
+        )->num_rows;
+    }
+    return $ready;
+}
+
+/**
+ * Hash a bearer token for storage.
+ *
+ * Reset and remember-me tokens are bearer credentials: whoever holds one can
+ * take over the account. Storing the raw value meant a read of the database
+ * (a backup, a stray dump, or the SQL injection that used to sit in the login
+ * path) handed over every account in the system. Only the digest is stored,
+ * so a database read yields nothing usable.
+ */
+function hashBearerToken($token) {
+    return hash('sha256', $token);
+}
+
+/**
+ * Password stored by the SQL installs in place of a real one.
+ *
+ * Not a valid bcrypt hash, so password_verify() rejects every guess against
+ * it. The accounts exist so the assignment rules and knowledge base have rows
+ * to reference, but nobody can sign in until a password is set with
+ * tools/set_password.php. This replaces the previously shipped default
+ * password, which was public in a public repository.
+ */
+define('LOCKED_PASSWORD_SENTINEL', '!locked');
+
+/**
+ * Client IP, safe to bind into a prepared statement.
+ */
+function clientIp() {
+    return isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+}
+
+/**
+ * Client User-Agent, safe to bind into a prepared statement.
+ *
+ * Truncated to the system_logs column width and stripped of control
+ * characters: the header is attacker-controlled, and unescaped
+ * interpolation of it into an INSERT let a crafted header inject SQL.
+ */
+function clientUserAgent() {
+    $ua = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
+    $ua = preg_replace('/[\x00-\x1F\x7F]/', '', $ua);
+    return substr($ua, 0, 255);
+}
 
 /**
  * Check if user is logged in
@@ -86,22 +237,28 @@ function restoreRememberedUser() {
     if ($conn->connect_error) {
         return;
     }
-    $token_escaped = $conn->real_escape_string($_COOKIE['remember_token']);
-    $token_query = "SELECT id, user_type, user_id FROM remember_tokens 
-                    WHERE token = '$token_escaped' AND expires_at > NOW() LIMIT 1";
-    $token_result = $conn->query($token_query);
+    $token_hash = hashBearerToken($_COOKIE['remember_token']);
+    $stmt = $conn->prepare(
+        "SELECT id, user_type, user_id FROM remember_tokens
+         WHERE token = ? AND expires_at > NOW() LIMIT 1"
+    );
+    $stmt->bind_param('s', $token_hash);
+    $stmt->execute();
+    $token_result = $stmt->get_result();
     if (!$token_result || $token_result->num_rows == 0) {
-        setcookie('remember_token', '', time() - 3600, '/');
+        $stmt->close();
+        clearRememberCookie();
         return;
     }
     $token_row = $token_result->fetch_assoc();
+    $stmt->close();
     $table = $token_row['user_type'] . 's';
     $status_field = $token_row['user_type'] == 'user' ? ', status, pending_expires_at' : '';
     $user_query = "SELECT id, name, email, department$status_field FROM $table WHERE id = " . (int)$token_row['user_id'] . " LIMIT 1";
     $user_result = $conn->query($user_query);
     if (!$user_result || $user_result->num_rows == 0) {
         $conn->query("DELETE FROM remember_tokens WHERE id = " . (int)$token_row['id']);
-        setcookie('remember_token', '', time() - 3600, '/');
+        clearRememberCookie();
         return;
     }
     $user = $user_result->fetch_assoc();
@@ -113,7 +270,7 @@ function restoreRememberedUser() {
                 $conn->query("UPDATE users SET status = 'rejected' WHERE id = " . (int)$user['id']);
             }
             $conn->query("DELETE FROM remember_tokens WHERE id = " . (int)$token_row['id']);
-            setcookie('remember_token', '', time() - 3600, '/');
+            clearRememberCookie();
             return;
         }
     }
@@ -122,6 +279,31 @@ function restoreRememberedUser() {
     $_SESSION['user_email'] = $user['email'];
     $_SESSION['user_role'] = $token_row['user_type'];
     $_SESSION['user_department'] = $user['department'];
+    // Rotate on use: the presented token is burned and replaced, so a copy
+    // captured from the cookie jar only works until its first use.
+    issueRememberToken($token_row['user_type'], $token_row['user_id']);
+}
+
+/**
+ * Cookie options for the remember-me token.
+ *
+ * Secure is off only because this is served over plain HTTP on XAMPP, where
+ * a Secure cookie is silently dropped and "remember me" would stop working.
+ * Set MCC_COOKIE_SECURE=1 once the app is behind HTTPS.
+ */
+function rememberCookieOptions() {
+    $secure = getenv('MCC_COOKIE_SECURE') === '1';
+    return [
+        'expires'  => 0,
+        'path'     => '/',
+        'secure'   => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ];
+}
+
+function clearRememberCookie() {
+    setcookie('remember_token', '', time() - 3600, rememberCookieOptions());
 }
 
 /**
@@ -136,25 +318,40 @@ function issueRememberToken($role, $userId) {
     }
     $token = bin2hex(random_bytes(32));
     $expires = date('Y-m-d H:i:s', time() + 30 * 24 * 3600);
-    $role_escaped = $conn->real_escape_string($role);
-    $conn->query("DELETE FROM remember_tokens WHERE user_type = '$role_escaped' AND user_id = " . (int)$userId);
-    $conn->query("INSERT INTO remember_tokens (user_type, user_id, token, expires_at) 
-                  VALUES ('$role_escaped', " . (int)$userId . ", '$token', '$expires')");
-    setcookie('remember_token', $token, time() + 30 * 24 * 3600, '/', '', false, true);
+    // Burn any prior token for this account first, so rotation on use and
+    // re-login cannot leave old tokens live in the table.
+    $del = $conn->prepare("DELETE FROM remember_tokens WHERE user_type = ? AND user_id = ?");
+    $del->bind_param('si', $role, $userId);
+    $del->execute();
+    $del->close();
+    $stmt = $conn->prepare(
+        "INSERT INTO remember_tokens (user_type, user_id, token, expires_at)
+         VALUES (?, ?, ?, ?)"
+    );
+    $stmt->bind_param('siss', $role, $userId, hashBearerToken($token), $expires);
+    $stmt->execute();
+    $stmt->close();
+    $opts = rememberCookieOptions();
+    // Pass the options ARRAY, not the positional form. The positional overload
+    // has no samesite argument, so calling it this way silently discarded the
+    // SameSite=Lax that rememberCookieOptions() had already computed.
+    setcookie('remember_token', $token, time() + 30 * 24 * 3600, $opts);
 }
 
 /**
  * Clear the remember-me cookie and token for a user
  */
 function destroyRememberToken($role, $userId) {
-    setcookie('remember_token', '', time() - 3600, '/');
+    clearRememberCookie();
     if ($role !== null && $userId !== null) {
         require_once __DIR__ . '/database.php';
         $database = new Database();
         $conn = $database->getConnection();
         if (!$conn->connect_error) {
-            $role_escaped = $conn->real_escape_string($role);
-            $conn->query("DELETE FROM remember_tokens WHERE user_type = '$role_escaped' AND user_id = " . (int)$userId);
+            $stmt = $conn->prepare("DELETE FROM remember_tokens WHERE user_type = ? AND user_id = ?");
+            $stmt->bind_param('si', $role, $userId);
+            $stmt->execute();
+            $stmt->close();
         }
     }
 }
@@ -169,12 +366,27 @@ function findUserByEmail($email) {
     if ($conn->connect_error) {
         return null;
     }
-    $email_escaped = $conn->real_escape_string($email);
+    // Only id/name/email/department, which exist on all three tables. A `status`
+    // column used to be selected here, but admins has no such column, so the
+    // query raised ER_BAD_FIELD_ERROR for every admin and the function fell
+    // through to null - which silently broke admin password reset, because
+    // forgot_password.php reports success either way.
+    // password is deliberately not selected: the reset flow never needs the
+    // hash, and fetching it only widens exposure.
     $tables = ['user' => 'users', 'technician' => 'technicians', 'admin' => 'admins'];
     foreach ($tables as $type => $table) {
-        $result = $conn->query("SELECT id, name, email, password, department, status FROM $table WHERE email = '$email_escaped' LIMIT 1");
-        if ($result && $result->num_rows == 1) {
-            $row = $result->fetch_assoc();
+        $stmt = $conn->prepare(
+            "SELECT id, name, email, department FROM {$table} WHERE email = ? LIMIT 1"
+        );
+        if (!$stmt) {
+            continue;
+        }
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = $result ? $result->fetch_assoc() : null;
+        $stmt->close();
+        if ($row) {
             $row['user_type'] = $type;
             return $row;
         }
@@ -223,10 +435,8 @@ function logActivity($action, $description = '') {
 
     $user_id    = $_SESSION['user_id'];
     $user_type  = isset($_SESSION['user_role']) ? $_SESSION['user_role'] : 'user';
-    $ip_address = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
-    // Absent for non-browser clients; was previously interpolated raw, which
-    // let a crafted User-Agent header inject SQL.
-    $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? substr($_SERVER['HTTP_USER_AGENT'], 0, 255) : '';
+    $ip_address = clientIp();
+    $user_agent = clientUserAgent();
 
     $stmt = $conn->prepare(
         "INSERT INTO system_logs
@@ -346,6 +556,112 @@ function timeAgo($datetime) {
     } else {
         return formatDate($datetime);
     }
+}
+
+/**
+ * Whether a Host header names this machine rather than an attacker.
+ *
+ * Only loopback and RFC1918 literals qualify. A bare hostname is NOT enough:
+ * "evil.com" is a syntactically valid plain hostname, so accepting any of
+ * them would let a request forge the domain that reset emails link to.
+ */
+function isTrustedLocalHost($host) {
+    if ($host === '' || $host === null) {
+        return false;
+    }
+    // Drop any :port suffix, keeping IPv6 brackets intact.
+    $name = strtolower($host);
+    if (preg_match('/^(\[[0-9a-f:]+\]|[^:]+)(:\d+)?$/', $name, $m)) {
+        $name = $m[1];
+    }
+    if ($name === 'localhost' || $name === '[::1]' || $name === '::1') {
+        return true;
+    }
+    if (!filter_var(trim($name, '[]'), FILTER_VALIDATE_IP)) {
+        return false;
+    }
+    return filter_var(
+        trim($name, '[]'),
+        FILTER_VALIDATE_IP,
+        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+    ) === false;
+}
+
+/**
+ * Absolute base URL of the application, for links in emails.
+ *
+ * Built from MCC_BASE_URL when set. The Host header is never trusted for a
+ * public hostname, because it is supplied by the client: a reset or ticket
+ * link built from it can be pointed at an attacker's domain and phish whoever
+ * receives it. It is consulted only to recover the local address on XAMPP
+ * (localhost / 127.0.0.0/8 / RFC1918), where no public domain exists yet.
+ *
+ * @return string Absolute base URL, or '' when it cannot be determined safely.
+ */
+function appBaseUrl() {
+    $configured = getenv('MCC_BASE_URL');
+    if ($configured) {
+        return rtrim($configured, '/');
+    }
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '';
+    if (isTrustedLocalHost($host)) {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+        // Strip the page name, keeping only the application root.
+        $dir = rtrim(dirname($dir), '/');
+        return $scheme . '://' . $host . $dir;
+    }
+    return '';
+}
+
+/**
+ * Send the password reset link by email.
+ *
+ * The link is deliberately not shown on the page. Rendering it meant the
+ * bearer token was written into browser history, the Apache access log and
+ * the Referer header of any link followed from that page.
+ */
+function sendPasswordResetEmail($to, $name, $link) {
+    $body = '<!DOCTYPE html><html><head><style>'
+        . 'body{font-family:Arial,sans-serif;background:#050507;color:#e0e0e0;padding:20px;}'
+        . '.container{max-width:600px;margin:0 auto;background:#0a0a0f;border:1px solid #1a1a2e;border-radius:12px;padding:30px;}'
+        . '.header{border-bottom:2px solid #00ff88;padding-bottom:20px;margin-bottom:20px;}'
+        . '.logo{color:#00ff88;font-size:24px;font-weight:bold;}'
+        . '.title{color:#fff;font-size:18px;margin:20px 0;}'
+        . '.message{color:#ccc;line-height:1.6;}'
+        . '.button{display:inline-block;background:linear-gradient(135deg,#00ff88,#00cc6a);color:#050507;'
+        . 'padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:20px;}'
+        . '.footer{margin-top:30px;padding-top:20px;border-top:1px solid #1a1a2e;color:#666;font-size:12px;}'
+        . '</style></head><body><div class="container">'
+        . '<div class="header"><span class="logo">MCC ICT HELPDESK</span></div>'
+        . '<div class="title">Password reset requested</div>'
+        . '<div class="message">'
+        . '<p>Hello ' . htmlspecialchars($name) . ',</p>'
+        . '<p>A password reset was requested for your MCC ICT Helpdesk account. '
+        . 'Use the button below to choose a new password. The link expires in 24 hours '
+        . 'and can only be used once.</p>'
+        . '<p>If you did not request this, you can ignore this email; your password '
+        . 'will not change.</p></div>'
+        . '<a href="' . htmlspecialchars($link) . '" class="button">Reset my password</a>'
+        . '<div class="footer"><p>This is an automated message from the MCC ICT Helpdesk System.</p>'
+        . '<p>Please do not reply directly to this email.</p></div>'
+        . '</div></body></html>';
+
+    $headers = [
+        'From: MCC ICT Helpdesk <noreply@mcc.co.zw>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=UTF-8',
+        'X-Mailer: PHP/' . phpversion(),
+    ];
+    // Suppressed and logged rather than emitted: a mail() warning is only
+    // raised when there is an account to mail, so letting it reach the
+    // response would tell a caller whether the address exists and undo the
+    // uniform reply that the forgot-password form depends on.
+    $sent = @mail($to, 'Reset your MCC ICT Helpdesk password', $body, implode("\r\n", $headers));
+    if (!$sent) {
+        error_log('MCC Helpdesk: password reset email could not be sent to ' . $to);
+    }
+    return $sent;
 }
 
 /**

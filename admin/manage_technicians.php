@@ -11,7 +11,13 @@ $success = '';
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    if (isset($_POST['action'])) {
+    // These actions create, modify and delete technician accounts, so a
+    // cross-site POST must not be able to reach them with the admin's cookie
+    // alone.
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+    } elseif (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'add_technician':
                 $name = trim($_POST['name']);
@@ -22,6 +28,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if (empty($name) || empty($specialization) || empty($email) || empty($password)) {
                     $error = 'Name, specialization, email and password are required';
+                } elseif (strlen($password) < 8) {
+                    $error = 'Password must be at least 8 characters';
                 } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $error = 'Invalid email format';
                 } else {
@@ -413,6 +421,7 @@ logActivity('VIEW_MANAGE_TECHNICIANS', 'Admin viewed technician management page'
                 </h2>
                 <form method="POST" class="flex flex-wrap gap-4 items-end">
                     <input type="hidden" name="action" value="add_technician">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                     <div class="flex-1 min-w-[180px]">
                         <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Full Name</label>
                         <input type="text" name="name" class="cyber-input" placeholder="John Smith" required>
@@ -517,6 +526,7 @@ logActivity('VIEW_MANAGE_TECHNICIANS', 'Admin viewed technician management page'
                                                 </button>
                                                 <form method="POST" class="inline" onsubmit="return confirm('Reset workload for this technician?')">
                                                     <input type="hidden" name="action" value="reset_workload">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                                     <input type="hidden" name="tech_id" value="<?php echo $tech['id']; ?>">
                                                     <button type="submit" class="cyber-btn-secondary px-2 py-1 text-xs">
                                                         <i data-lucide="refresh-cw" class="w-3 h-3"></i>
@@ -524,6 +534,7 @@ logActivity('VIEW_MANAGE_TECHNICIANS', 'Admin viewed technician management page'
                                                 </form>
                                                 <form method="POST" class="inline" onsubmit="return confirm('Delete this technician?')">
                                                     <input type="hidden" name="action" value="delete_technician">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                                     <input type="hidden" name="tech_id" value="<?php echo $tech['id']; ?>">
                                                     <button type="submit" class="cyber-btn-danger px-2 py-1 text-xs">
                                                         <i data-lucide="trash-2" class="w-3 h-3"></i>
@@ -564,6 +575,7 @@ logActivity('VIEW_MANAGE_TECHNICIANS', 'Admin viewed technician management page'
             </div>
             <form method="POST">
                 <input type="hidden" name="action" value="update_technician">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <input type="hidden" id="edit_tech_id" name="tech_id">
                 <div class="space-y-4">
                     <div>

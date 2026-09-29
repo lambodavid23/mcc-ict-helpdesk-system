@@ -5,6 +5,7 @@
  */
 
 require_once 'database.php';
+require_once 'auth_helper.php';
 
 class NotificationService {
     private $conn;
@@ -111,8 +112,11 @@ class NotificationService {
     }
     
     private function getTicketUrl($ticket_id, $user_type) {
-        $base_url = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['PHP_SELF']);
-        
+        $base_url = appBaseUrl();
+        if ($base_url === '') {
+            $base_url = 'http://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . dirname($_SERVER['PHP_SELF']);
+        }
+
         switch ($user_type) {
             case 'admin':
                 return $base_url . '/admin/ticket_detail.php?id=' . $ticket_id;

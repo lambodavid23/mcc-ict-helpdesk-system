@@ -116,14 +116,37 @@ new icon to a page, run `npm run build:icons` so it is included in the bundle.
    - Click "Import" tab
    - Choose `database.sql` file
    - Click "Go"
+
+   > Select the database in phpMyAdmin before importing. `database.sql` does not
+   > create or switch databases itself, so it can never write to the wrong one.
 4. Import `config/migrations/baseline_data.sql` the same way. This adds the
    staff accounts, the auto-assignment rules, and the knowledge base articles
    the AI assistant relies on. It is safe to re-run and will not duplicate rows.
+
+> **The accounts these files create have no usable password.** They are
+> inserted with the sentinel value `!locked`, which is not a valid bcrypt
+> hash, so no login can match it. This is deliberate: these SQL files are in a
+> public repository, so an earlier version that seeded a default password made
+> the admin and all four technicians reachable by anyone who had read the
+> source. Set a real password from the command line before signing in:
+
+> ```bash
+> # Create (or reset) the admin, printing a generated password once
+> php tools/create_admin.php
+>
+> # Set or reset any account, in any role table
+> php tools/set_password.php JoseLambo@mcc.co.zw
+> ```
+
+> Trying to log in before doing this returns an explicit message telling you
+> which command to run, rather than a generic failure.
 
 > **Never open `seed.php` in a browser.** It drops the core tables and
 > recreates them with demo data, destroying all tickets and accounts. It is now
 > restricted to the command line and requires an explicit opt-in:
 > `set SEED_ALLOW=1 && php seed.php`
+> It is a *development* tool and its demo accounts use trivial passwords
+> (`admin123`, `tech123`, `user123`). Never use its output for anything real.
 
 ### Step 3: Deploy Application
 1. Copy the entire project folder to `C:\xampp\htdocs\mcc-ict-helpdesk\`
@@ -144,29 +167,47 @@ new icon to a page, run `npm run build:icons` so it is included in the bundle.
 2. Navigate to: http://localhost/mcc-ict-helpdesk/
 3. You will be redirected to the login page
 
-## Default Login Credentials
+## Accounts Created by the Installer
 
-All accounts below are created by `config/migrations/baseline_data.sql` with
-the password `password`. **Change every one of them before real use.**
+These accounts are created by `config/migrations/baseline_data.sql` and by the
+sample data in `database.sql`. **None of them has a working password.** Each is
+inserted with the sentinel `!locked`, which no input can match, so there is no
+default credential sitting in a public repository waiting to be used.
 
-### Admin Account
-- **Email**: admin@mcc.co.zw
+Set a password for any of them from the command line:
+
+```bash
+php tools/create_admin.php                      # admin@mcc.co.zw, generated password
+php tools/set_password.php admin@mcc.co.zw      # or reset a specific account
+php tools/set_password.php JoseLambo@mcc.co.zw
+```
+
+The password is printed once and stored only as a bcrypt hash. If you would
+rather not keep the seeded accounts at all, delete the rows and create exactly
+the staff you need with `tools/create_admin.php`.
 
 ### Technician Accounts
 | Specialization | Email |
 | --- | --- |
 | Network | JoseLambo@mcc.co.zw |
-| Hardware | MaryTambo@mcc.co.zw |
-| Software | PeterNcube@mcc.co.zw |
-| General | SarahZhou@mcc.co.zw |
+| Network | TanakaK@mcc.co.zw |
+| Hardware | AbbyC@mcc.co.zw |
+| Software | TanyaS@mcc.co.zw |
+| General | SeanM@mcc.co.zw |
+
+`General` is the catch-all specialization: it matches any ticket category. Keep at
+least one general technician, otherwise hardware and software tickets have
+nowhere to route.
+
+Specialization is set by hand in the admin panel — the system does not infer
+skill from ticket history. The resolution rate shown in Reports is display-only
+and does not affect routing.
 
 ### User Accounts
 | Email | Department |
 | --- | --- |
 | IanSmith@mcc.co.zw | ICT |
-| AliceMoyo@mcc.co.zw | Finance |
-| BobChikore@mcc.co.zw | Registry |
-| ChenaiDube@mcc.co.zw | Housing |
+| RDzanza@mcc.co.zw | ICT |
 
 ## System Features in Detail
 
@@ -210,12 +251,38 @@ the password `password`. **Change every one of them before real use.**
 
 ## Security Features
 
-- Password hashing (bcrypt)
-- Session-based authentication
-- SQL injection prevention
-- XSS protection
-- CSRF protection
+- Password hashing (bcrypt via `password_hash`/`password_verify`), with
+  `password_needs_rehash` upgrading stored hashes on successful login
+- No default password: installer-created accounts use an unmatchable sentinel
+  and are unlocked with `tools/create_admin.php` / `tools/set_password.php`
+- Session-based authentication, with the session id rotated on login
+  (fixation) and `HttpOnly`/`SameSite`/`use_strict_mode` on the session cookie
+- Login brute-force throttling: 5 failures per IP per 15 minutes
+- CSRF tokens on every state-changing form - including login, registration and
+  password-reset request - validated with `hash_equals`
+- Password-reset and remember-me tokens stored only as SHA-256 digests, so a
+  database read cannot be replayed to take over an account
+- Remember-me tokens rotated on use and burned by logout or a password change
+- Reset links delivered by email over a configured base URL, never rendered
+  into the page, and never built from the client-supplied `Host` header
+- SQL injection prevention (prepared statements on the authentication paths,
+  including the login audit log, which previously interpolated `User-Agent`)
+- XSS protection (`htmlspecialchars` on output)
 - Role-based access control
+- `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` on every
+  response
+
+### Environment variables
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Database connection | XAMPP defaults (`localhost`, `root`, empty, `mcc_helpdesk`) |
+| `MCC_BASE_URL` | Absolute base URL used in emailed links | Derived from `Host`, validated |
+| `MCC_COOKIE_SECURE` | Set to `1` to force `Secure` on cookies | Off (plain HTTP on XAMPP) |
+| `AI_API_KEY` | Optional, for the AI assistant | Empty, assistant degrades gracefully |
+
+Set `MCC_BASE_URL` and `MCC_COOKIE_SECURE=1` before serving this over the
+public internet, and give MySQL a real password.
 
 ## Maintenance
 

@@ -491,6 +491,7 @@ logActivity('VIEW_TECHNICIAN_QUEUE', 'Technician viewed their queue');
                                 <p class="text-sm text-[#ccc] mb-2 truncate"><?php echo htmlspecialchars($ticket['title']); ?></p>
                                 <form method="POST" action="technician_update.php">
                                     <input type="hidden" name="action" value="claim">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                     <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
                                     <button type="submit" class="cyber-btn-orange w-full justify-center text-xs py-1">
                                         <i data-lucide="plus" class="w-3 h-3"></i>

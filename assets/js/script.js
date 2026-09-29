@@ -92,15 +92,32 @@ function confirmAction(message, callback) {
     }
 }
 
-// AJAX request helper
+/**
+ * AJAX request helper
+ *
+ * Every state-changing endpoint validates a CSRF token, so the token is
+ * appended to the body here. Pages expose it as a meta tag; if one is missing
+ * the request is refused rather than sent, which surfaces the omission
+ * instead of silently failing the handler.
+ */
 function ajaxRequest(url, method, data, callback) {
     const xhr = new XMLHttpRequest();
     xhr.open(method, url, true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    
+
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (!meta) {
+        showAlert('Security token missing. Please reload the page.', 'error');
+        return;
+    }
+    const body = data ? data + '&csrf_token=' + encodeURIComponent(meta.content)
+                      : 'csrf_token=' + encodeURIComponent(meta.content);
+
     xhr.onload = function() {
         if (xhr.status === 200) {
             callback(xhr.responseText);
+        } else if (xhr.status === 403) {
+            showAlert('Your session token expired. Please reload the page.', 'error');
         } else {
             showAlert('An error occurred. Please try again.', 'error');
         }
@@ -110,7 +127,7 @@ function ajaxRequest(url, method, data, callback) {
         showAlert('Network error. Please check your connection.', 'error');
     };
     
-    xhr.send(data);
+    xhr.send(body);
 }
 
 // Update ticket status

@@ -2,10 +2,16 @@
 -- Mutare City Council ICT Department
 -- MySQL Database Schema
 -- Each role has its own separate table: admins, users, technicians
-
--- Create database
-CREATE DATABASE IF NOT EXISTS mcc_helpdesk;
-USE mcc_helpdesk;
+--
+-- This file deliberately contains NO "CREATE DATABASE" and NO "USE". It used to
+-- hardcode "USE mcc_helpdesk;", which meant that pointing the client at any
+-- other database - a scratch copy, a staging server, a restored dump - silently
+-- wrote to the live one instead, where it would then fail partway through on
+-- tables that already exist.
+--
+-- Select the target database yourself before importing:
+--   mysql -u root -e "CREATE DATABASE mcc_helpdesk"
+--   mysql -u root mcc_helpdesk < database.sql
 
 -- Admins table
 CREATE TABLE admins (
@@ -53,6 +59,15 @@ CREATE TABLE password_resets (
     used TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_token (token)
+);
+
+-- Failed login attempts, used to throttle brute force on the login form.
+-- See config/migrations/login_throttle.sql.
+CREATE TABLE login_attempts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    attempted_at DATETIME NOT NULL,
+    KEY idx_ip_time (ip_address, attempted_at)
 );
 
 -- Technicians table
@@ -226,24 +241,51 @@ CREATE TABLE system_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Insert sample admins
+-- Sample accounts.
+--
+-- These are created LOCKED, with the sentinel password '!locked' rather than a
+-- real hash. '!locked' is not a valid bcrypt hash, so password_verify() rejects
+-- every guess against it and nobody can sign in until a password is set. The
+-- rows exist so the sample tickets below have an author and an assignee.
+--
+-- They used to carry the bcrypt hash of the literal string "password". This
+-- file is in a public repository, so that made every one of these accounts,
+-- including the admin, reachable by anyone who had read the source.
+--
+-- After importing, set real passwords from the command line:
+--   php tools/create_admin.php            (new admin, password generated)
+--   php tools/set_password.php <email>    (set/reset any account's password)
+
+-- ---------------------------------------------------------------- roster
+-- Accounts are created LOCKED ('!locked' is not a valid bcrypt hash, so
+-- password_verify rejects every guess). Set real passwords with:
+--   php tools/create_admin.php            (new admin, password generated)
+--   php tools/set_password.php <email>    (set/reset any account's password)
+
+-- One admin
 INSERT INTO admins (name, email, password, department) VALUES
-('Admin User', 'admin@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ICT');
+('System Administrator', 'admin@mcc.co.zw', '!locked', 'ICT');
 
--- Insert sample users
-INSERT INTO users (name, email, password, department) VALUES
-('Regular User', 'user@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Finance'),
-('Employee One', 'emp1@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'HR'),
-('Employee Two', 'emp2@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Administration');
+-- Two users
+INSERT INTO users (name, email, password, department, status) VALUES
+('Ian Smith', 'IanSmith@mcc.co.zw', '!locked', 'ICT', 'active'),
+('R. Dzanza', 'RDzanza@mcc.co.zw', '!locked', 'ICT', 'active');
 
--- Insert sample technicians
+-- Five technicians.
+-- specialization is MANUAL and admin-assigned (enum: network/hardware/
+-- software/general); assignment matches on it plus current_workload.
+-- 'general' is the catch-all that matches any category, so SeanM keeps that
+-- one. Nothing infers skill from ticket history - reports.php computes a
+-- resolution rate, but that number is display-only and never affects routing.
 INSERT INTO technicians (name, email, password, specialization, current_workload, status, phone, department) VALUES
-('John Technician', 'john.tech@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'general', 2, 'available', '+263712345678', 'ICT'),
-('Mary Hardware', 'mary.hardware@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'hardware', 1, 'available', '+263712345679', 'ICT'),
-('Peter Network', 'peter.network@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'network', 3, 'busy', '+263712345680', 'ICT'),
-('Sarah Software', 'sarah.software@mcc.co.zw', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'software', 0, 'available', '+263712345681', 'ICT');
+('Jose Lambo',     'JoseLambo@mcc.co.zw', '!locked', 'network',  1, 'available', '+263712345678', 'ICT'),
+('Abby Chikore',   'AbbyC@mcc.co.zw',     '!locked', 'hardware', 0, 'available', '+263712345679', 'ICT'),
+('Tanya Sibanda',  'TanyaS@mcc.co.zw',    '!locked', 'software', 2, 'available', '+263712345680', 'ICT'),
+('Sean Moyo',      'SeanM@mcc.co.zw',     '!locked', 'general',  0, 'available', '+263712345681', 'ICT'),
+('Tanaka Kgosana', 'TanakaK@mcc.co.zw',   '!locked', 'network',  0, 'busy',      '+263712345682', 'ICT');
 
--- Insert sample attendance for today (on-duty technicians eligible for assignment)
+-- Insert sample attendance for today (on-duty technicians eligible for assignment).
+-- TanakaK (id 5) is deliberately off duty so he is not auto-assignable.
 INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
 (1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
 (2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
@@ -251,23 +293,25 @@ INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out
 (4, CURDATE(), NOW() - INTERVAL 4 HOUR, NULL);
 
 -- Insert sample tickets
+-- created_by: 1 = Ian Smith, 2 = R. Dzanza
+-- assigned_to: 1 = Jose (network), 3 = Tanya (software), 4 = Sean (general)
 INSERT INTO tickets (title, description, department, category, priority, status, created_by, assigned_to) VALUES
-('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 3),
+('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 1),
 ('Printer not working', 'The shared printer in the finance department is not printing documents. It shows offline status.', 'Finance', 'hardware', 'medium', 'open', 1, NULL),
-('Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 1),
-('Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 3, NULL),
-('Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 4),
+('Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 4),
+('Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 2, NULL),
+('Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 3),
 ('Computer running slow', 'My computer is extremely slow and takes a long time to open applications.', 'HR', 'hardware', 'medium', 'open', 2, NULL);
 
 -- Insert sample ticket assignments
 INSERT INTO ticket_assignments (ticket_id, technician_id, status, notes) VALUES
-(1, 3, 'active', 'Working on network configuration issue'),
-(3, 1, 'completed', 'Password reset successfully'),
-(5, 4, 'active', 'Investigating email server settings');
+(1, 1, 'active', 'Working on network configuration issue'),
+(3, 4, 'completed', 'Password reset successfully'),
+(5, 3, 'active', 'Investigating email server settings');
 
 -- Insert sample fault history
 INSERT INTO fault_history (ticket_id, problem, solution, resolved_by, resolved_at, time_to_resolve) VALUES
-(3, 'User account locked due to failed login attempts', 'Reset user password and unlocked account. Provided training on proper password management.', 1, '2024-01-15 14:30:00', 45);
+(3, 'User account locked due to failed login attempts', 'Reset user password and unlocked account. Provided training on proper password management.', 4, '2024-01-15 14:30:00', 45);
 
 -- Insert sample knowledge base
 INSERT INTO knowledge_base (issue_keyword, category, recommended_solution, usage_count) VALUES
@@ -280,9 +324,9 @@ INSERT INTO knowledge_base (issue_keyword, category, recommended_solution, usage
 -- Insert sample system logs
 INSERT INTO system_logs (user_id, user_type, action, description, ip_address) VALUES
 (1, 'admin', 'LOGIN', 'Admin logged into system', '192.168.1.100'),
-(1, 'technician', 'TICKET_ASSIGNED', 'John assigned to ticket #1', '192.168.1.101'),
+(1, 'technician', 'TICKET_ASSIGNED', 'Jose assigned to ticket #1', '192.168.1.101'),
 (1, 'user', 'TICKET_CREATED', 'User created new ticket', '192.168.1.102'),
-(2, 'technician', 'TICKET_RESOLVED', 'Mary resolved hardware issue', '192.168.1.103');
+(2, 'technician', 'TICKET_RESOLVED', 'Sean resolved account lockout', '192.168.1.103');
 
 -- Create indexes for better performance
 CREATE INDEX idx_tickets_status ON tickets(status);

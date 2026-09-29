@@ -10,8 +10,15 @@ if (isset($_SESSION['user_id'])) {
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
+    // Login is a state-changing POST: without a token an attacker can post
+    // credentials into a victim's browser and have it silently authenticated as
+    // the attacker, so anything they then upload or read goes to that account.
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $errors[] = 'Invalid or expired form token. Please reload the page and try again.';
+    }
+    $email = trim($_POST['email'] ?? '');
+    $password = $_POST['password'] ?? '';
     
     if (empty($email)) {
         $errors[] = 'Email is required';
@@ -20,10 +27,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $errors[] = 'Password is required';
     }
     
+    // Connect once, then check the throttle before doing any credential work.
+    $database = new Database();
+    $conn = $database->getConnection();
+
+    if (empty($errors) && !loginAllowed(clientIp(), $conn)) {
+        $errors[] = 'Too many failed attempts. Please wait 15 minutes and try again.';
+    }
+
     if (empty($errors)) {
-        $database = new Database();
-        $conn = $database->getConnection();
-        
         $email = $conn->real_escape_string($email);
         $login_tables = [
             'admin' => 'admins',
@@ -45,13 +57,38 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
         
         if ($user) {
-            if (password_verify($password, $user['password'])) {
+            if ($user['password'] === LOCKED_PASSWORD_SENTINEL) {
+                // The SQL installs create their accounts with this sentinel
+                // instead of a default password, so there is no working
+                // credential to find in the source. Say so, rather than
+                // returning a generic failure the installer cannot act on.
+                $errors[] = 'This account has not been given a password yet. '
+                          . 'An administrator must run: php tools/set_password.php ' . $email;
+            } elseif (password_verify($password, $user['password'])) {
+                // Transparently upgrade a stored hash when PHP's default cost
+                // or algorithm has moved on. Without this a hash written years
+                // ago stays at its old cost forever.
+                if (password_needs_rehash($user['password'], PASSWORD_DEFAULT)) {
+                    $rehash = password_hash($password, PASSWORD_DEFAULT);
+                    $rehash_table = $conn->real_escape_string($table);
+                    $rehash_stmt = $conn->prepare(
+                        "UPDATE $rehash_table SET password = ? WHERE id = ?"
+                    );
+                    $rehash_stmt->bind_param('si', $rehash, $user['id']);
+                    $rehash_stmt->execute();
+                    $rehash_stmt->close();
+                }
                 if ($role === 'user' && isset($user['status']) && $user['status'] !== 'active') {
                     if ($user['status'] === 'pending') {
                         if (isset($user['pending_expires_at']) && strtotime($user['pending_expires_at']) < time()) {
                             $conn->query("UPDATE users SET status = 'rejected' WHERE id = " . (int)$user['id']);
                             $errors[] = 'Your registration request has expired after 3 days without approval. Please contact the ICT department.';
                         } else {
+                            // New session id on the privilege change, so a
+                            // session id planted before login cannot inherit
+                            // the authenticated one.
+                            session_regenerate_id(true);
+                            clearLoginFailures(clientIp(), $conn);
                             $_SESSION['user_id'] = $user['id'];
                             $_SESSION['user_name'] = $user['name'];
                             $_SESSION['user_email'] = $user['email'];
@@ -59,11 +96,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $_SESSION['user_department'] = $user['department'];
                             $_SESSION['user_status'] = 'pending';
 
-                            $ip_address = $_SERVER['REMOTE_ADDR'];
-                            $user_agent = $_SERVER['HTTP_USER_AGENT'];
-                            $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
-                                         VALUES ('{$user['id']}', '$role', 'LOGIN', 'Pending user logged in with temporary access', '$ip_address', '$user_agent')";
-                            $conn->query($log_query);
+                            $log_stmt = $conn->prepare(
+                                "INSERT INTO system_logs
+                                    (user_id, user_type, action, description, ip_address, user_agent)
+                                 VALUES (?, ?, 'LOGIN', 'Pending user logged in with temporary access', ?, ?)"
+                            );
+                            $log_stmt->bind_param('isss', $user['id'], $role, clientIp(), clientUserAgent());
+                            $log_stmt->execute();
+                            $log_stmt->close();
 
                             header('Location: ../user/dashboard.php');
                             exit();
@@ -74,17 +114,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $errors[] = 'Your account has been ' . $user['status'] . '. Please contact the ICT department.';
                     }
                 } else {
+                    session_regenerate_id(true);
+                    clearLoginFailures(clientIp(), $conn);
                     $_SESSION['user_id'] = $user['id'];
                     $_SESSION['user_name'] = $user['name'];
                     $_SESSION['user_email'] = $user['email'];
                     $_SESSION['user_role'] = $role;
                     $_SESSION['user_department'] = $user['department'];
                     
-                    $ip_address = $_SERVER['REMOTE_ADDR'];
-                    $user_agent = $_SERVER['HTTP_USER_AGENT'];
-                    $log_query = "INSERT INTO system_logs (user_id, user_type, action, description, ip_address, user_agent) 
-                                 VALUES ('{$user['id']}', '$role', 'LOGIN', 'User logged into system', '$ip_address', '$user_agent')";
-                    $conn->query($log_query);
+                    $log_stmt = $conn->prepare(
+                        "INSERT INTO system_logs
+                            (user_id, user_type, action, description, ip_address, user_agent)
+                         VALUES (?, ?, 'LOGIN', 'User logged into system', ?, ?)"
+                    );
+                    $log_stmt->bind_param('isss', $user['id'], $role, clientIp(), clientUserAgent());
+                    $log_stmt->execute();
+                    $log_stmt->close();
                     
                     if (isset($_POST['remember'])) {
                         issueRememberToken($role, $user['id']);
@@ -106,10 +151,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     exit();
                 }
             } else {
+                // One message for both branches, and a failure recorded either
+                // way, so the response cannot be used to tell a wrong password
+                // from an unknown address.
                 $errors[] = 'Invalid email or password';
+                recordLoginFailure(clientIp(), $conn);
             }
         } else {
             $errors[] = 'Invalid email or password';
+            recordLoginFailure(clientIp(), $conn);
         }
     }
 }
@@ -183,6 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <?php endif; ?>
             
             <form method="POST" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <div>
                     <label class="block text-[#555] text-[10px] uppercase tracking-widest mb-2 font-medium">Email</label>
                     <div class="relative">

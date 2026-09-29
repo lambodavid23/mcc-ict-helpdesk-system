@@ -1,5 +1,8 @@
 <?php
-session_start();
+// auth_helper.php starts the session itself and sets the hardened cookie
+// params (HttpOnly/SameSite/use_strict_mode) and security headers. A bare
+// session_start() here was bypassing all of that on the registration page.
+require_once '../config/auth_helper.php';
 require_once '../config/database.php';
 
 if (isset($_SESSION['user_id'])) {
@@ -11,11 +14,15 @@ $errors = [];
 $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $name = trim($_POST['name']);
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
-    $confirm_password = $_POST['confirm_password'];
-    $department = trim($_POST['department']);
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $errors[] = 'Invalid or expired form token. Please reload the page and try again.';
+    }
+    $name = trim($_POST['name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $password = $_POST['password'] ?? '';
+    $confirm_password = $_POST['confirm_password'] ?? '';
+    $department = trim($_POST['department'] ?? '');
     
     if (empty($name)) { $errors[] = 'Full name is required'; }
     if (empty($email)) { $errors[] = 'Email is required'; }
@@ -157,6 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <?php endif; ?>
             
             <form method="POST" class="space-y-2.5">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <div>
                     <label class="block text-[#555] text-[10px] uppercase tracking-widest mb-1 font-medium">Full Name</label>
                     <div class="relative">

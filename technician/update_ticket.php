@@ -31,6 +31,10 @@ $ticket = null;
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+    } else {
     $ticket_id = $_POST['ticket_id'];
     $action = $_POST['action'];
     
@@ -110,6 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Reload ticket data after update
         $ticket_id = (int)$ticket_id;
     }
+    }
 }
 
 // Get ticket ID from URL parameter
@@ -162,6 +167,7 @@ logActivity('VIEW_UPDATE_TICKET', "Technician viewed update page for ticket $tic
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Update Ticket - MCC ICT Helpdesk</title>
     <link rel="stylesheet" href="../assets/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/css/style.css">

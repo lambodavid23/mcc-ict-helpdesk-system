@@ -19,6 +19,11 @@ $category_filter = isset($_GET['category']) ? $_GET['category'] : '';
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+        $action = '';
+    } else {
     $action = $_POST['action'];
     
     switch ($action) {
@@ -105,6 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
             break;
     }
+    }
 }
 
 // Build search query
@@ -141,6 +147,7 @@ logActivity('VIEW_KNOWLEDGE_BASE', 'User viewed knowledge base');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Knowledge Base - MCC ICT Helpdesk</title>
     <link rel="stylesheet" href="../assets/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/css/style.css">
@@ -319,6 +326,7 @@ logActivity('VIEW_KNOWLEDGE_BASE', 'User viewed knowledge base');
                                                 <button onclick="editSolution(<?php echo $solution['id']; ?>)" class="btn btn-sm btn-secondary">Edit</button>
                                                 <form method="POST" action="" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this solution?')">
                                                     <input type="hidden" name="action" value="delete_solution">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                                     <input type="hidden" name="kb_id" value="<?php echo $solution['id']; ?>">
                                                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                                                 </form>
@@ -358,6 +366,7 @@ logActivity('VIEW_KNOWLEDGE_BASE', 'User viewed knowledge base');
             </div>
             <form method="POST" action="" id="solutionForm">
                 <input type="hidden" name="action" id="formAction" value="add_solution">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <input type="hidden" id="edit_kb_id" name="kb_id">
                 
                 <div class="form-group">

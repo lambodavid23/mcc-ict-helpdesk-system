@@ -27,6 +27,12 @@ if (!$technician) {
 $tech_id = $technician['id'];
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $_SESSION['error'] = 'Invalid or expired form token. Please reload the page and try again.';
+        header('Location: technician_queue.php');
+        exit();
+    }
     $ticket_id = (int)$_POST['ticket_id'];
     $ticket = $conn->query("SELECT * FROM tickets WHERE id = $ticket_id")->fetch_assoc();
     

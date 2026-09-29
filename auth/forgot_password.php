@@ -9,9 +9,19 @@ if (isset($_SESSION['user_id'])) {
 
 $errors = [];
 $reset_link = '';
+// Outcome of the last submission, deliberately independent of whether a token
+// was actually created. The template keys off this, not off $reset_link, so
+// a known and an unknown address render the identical page. Keying off
+// $reset_link would just invert the oracle: "sent" for real accounts, the
+// form again for unknown ones.
+$reset_sent = false;
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $email = trim($_POST['email']);
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $errors[] = 'Invalid or expired form token. Please reload the page and try again.';
+    }
+    $email = trim($_POST['email'] ?? '');
 
     if (empty($email)) {
         $errors[] = 'Email is required';
@@ -24,14 +34,30 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $expires = date('Y-m-d H:i:s', time() + 24 * 3600);
             $database = new Database();
             $conn = $database->getConnection();
-            $user_type_escaped = $conn->real_escape_string($user['user_type']);
-            $conn->query("DELETE FROM password_resets WHERE user_type = '$user_type_escaped' AND user_id = " . (int)$user['id']);
-            $conn->query("INSERT INTO password_resets (user_type, user_id, token, expires_at) 
-                          VALUES ('$user_type_escaped', " . (int)$user['id'] . ", '$token', '$expires')");
-            $reset_link = "http://" . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/') . "/reset_password.php?token=" . $token;
-        } else {
-            $errors[] = 'No account found with that email address';
+            $stmt = $conn->prepare(
+                "DELETE FROM password_resets WHERE user_type = ? AND user_id = ?"
+            );
+            $stmt->bind_param('si', $user['user_type'], $user['id']);
+            $stmt->execute();
+            $stmt->close();
+            $token_digest = hashBearerToken($token);
+            $stmt = $conn->prepare(
+                "INSERT INTO password_resets (user_type, user_id, token, expires_at)
+                 VALUES (?, ?, ?, ?)"
+            );
+            // bind_param takes its arguments by reference, so the digest has
+            // to be a variable rather than a call result.
+            $stmt->bind_param('siss', $user['user_type'], $user['id'], $token_digest, $expires);
+            $stmt->execute();
+            $stmt->close();
+            $reset_link = appBaseUrl() . "/auth/reset_password.php?token=" . $token;
+            sendPasswordResetEmail($user['email'], $user['name'], $reset_link);
         }
+        // Nothing is revealed about whether the address matched, and the token
+        // is never rendered: it would land in browser history, the access log
+        // and the Referer header of any link followed from the page.
+        $reset_sent = true;
+        $errors = [];
     }
 }
 ?>
@@ -86,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <span class="text-base font-bold text-[#e0e0e0] tracking-wide">City Of Mutare ICT Helpdesk</span>
         </div>
 
-        <?php if ($reset_link): ?>
+        <?php if ($reset_sent): ?>
             <div class="relative bg-[#0a0a0f]/90 border border-[#1a1a2e] rounded-xl p-8 text-center">
                 <div class="corner-accent corner-tl"></div>
                 <div class="corner-accent corner-tr"></div>
@@ -96,12 +122,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <div class="w-14 h-14 bg-[#00ff88]/10 border border-[#00ff88]/30 rounded-full flex items-center justify-center mx-auto mb-4">
                     <i data-lucide="mail-check" class="w-6 h-6 text-[#00ff88]"></i>
                 </div>
-                <h3 class="text-[#e0e0e0] text-base font-semibold mb-2 glow-text">RESET LINK CREATED</h3>
-                <p class="text-[#666] text-sm">A password reset link has been generated. Open it to choose a new password.</p>
-                <div class="mt-4 bg-[#0f0f15] border border-[#1a1a2e] rounded-lg p-3">
-                    <p class="text-[10px] text-[#555] uppercase tracking-widest mb-1">Reset link</p>
-                    <a href="<?php echo htmlspecialchars($reset_link); ?>" class="link-box text-[#00ff88] text-xs hover:underline"><?php echo htmlspecialchars($reset_link); ?></a>
-                </div>
+                <h3 class="text-[#e0e0e0] text-base font-semibold mb-2 glow-text">CHECK YOUR EMAIL</h3>
+                <p class="text-[#666] text-sm">If that address has an account, a reset link is on its way. The link expires in 24 hours.</p>
                 <a href="login.php" class="inline-flex items-center gap-2 bg-[#0f0f15] border border-[#00ff88] text-[#00ff88] px-5 py-2 rounded-lg text-sm hover:bg-[#00ff88]/10 transition-all mt-5">
                     <i data-lucide="log-in" class="w-4 h-4"></i>
                     BACK TO LOGIN
@@ -128,6 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <?php endif; ?>
 
             <form method="POST" class="space-y-3">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <div>
                     <label class="block text-[#555] text-[10px] uppercase tracking-widest mb-1 font-medium">Email</label>
                     <div class="relative">

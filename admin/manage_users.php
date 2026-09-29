@@ -11,7 +11,13 @@ $success = '';
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    if (isset($_POST['action'])) {
+    // Every action below is a POST, and the ones that reset a password or
+    // delete an account are high value, so a cross-site request must not be
+    // able to reach them with nothing but the admin's session cookie.
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+    } elseif (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'add_user':
                 $name = trim($_POST['name']);
@@ -21,6 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if (empty($name) || empty($email) || empty($password) || empty($department)) {
                     $error = 'All fields are required';
+                } elseif (strlen($password) < 8) {
+                    $error = 'Password must be at least 8 characters';
                 } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $error = 'Invalid email format';
                 } else {
@@ -121,8 +129,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
                 if ($account_id <= 0) {
                     $error = 'Invalid account';
-                } elseif (strlen($new_password) < 6) {
-                    $error = 'Password must be at least 6 characters';
+                } elseif (strlen($new_password) < 8) {
+                    $error = 'Password must be at least 8 characters';
                 } elseif ($new_password !== $confirm_password) {
                     $error = 'Passwords do not match';
                 } else {
@@ -132,6 +140,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     if ($conn->query($sql)) {
                         $success = ucfirst($reset_type) . ' password reset successfully';
                         logActivity('RESET_PASSWORD', "Reset password for $reset_type ID: $account_id");
+                        // An outstanding reset link and any live remember-me
+                        // cookie must not survive a forced password change,
+                        // or the new password can be undone by whoever holds
+                        // the old one.
+                        $conn->query("DELETE FROM password_resets WHERE user_type = '$reset_type' AND user_id = $account_id");
+                        destroyRememberToken($reset_type, $account_id);
                     } else {
                         $error = 'Failed to reset password';
                     }
@@ -495,6 +509,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                     <td>
                                         <form method="POST" class="inline">
                                             <input type="hidden" name="action" value="approve_user">
+                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                             <input type="hidden" name="user_id" value="<?php echo $p['id']; ?>">
                                             <button type="submit" class="cyber-btn px-2 py-1 text-xs">
                                                 <i data-lucide="check" class="w-3 h-3"></i> Approve
@@ -502,6 +517,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                         </form>
                                         <form method="POST" class="inline ml-1" onsubmit="return confirm('Reject this request?')">
                                             <input type="hidden" name="action" value="reject_user">
+                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                             <input type="hidden" name="user_id" value="<?php echo $p['id']; ?>">
                                             <button type="submit" class="cyber-btn-danger px-2 py-1 text-xs">
                                                 <i data-lucide="x" class="w-3 h-3"></i> Reject
@@ -524,6 +540,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                 </h2>
                 <form method="POST" class="flex flex-wrap gap-4 items-end">
                     <input type="hidden" name="action" value="add_user">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                     <div class="flex-1 min-w-[180px]">
                         <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Full Name</label>
                         <input type="text" name="name" class="cyber-input" placeholder="John Doe" required>
@@ -613,6 +630,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                                             <?php if ($user['status'] == 'pending'): ?>
                                                     <form method="POST" class="inline">
                                                         <input type="hidden" name="action" value="approve_user">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                                         <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
                                                         <button type="submit" class="cyber-btn px-2 py-1 text-xs" title="Approve">
                                                             <i data-lucide="check" class="w-3 h-3"></i>
@@ -725,15 +743,16 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
             </div>
             <p id="resetMeta" class="text-[#666] text-xs mb-4"></p>
             <input type="hidden" name="action" value="reset_password">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
             <input type="hidden" name="account_type" id="resetType">
             <input type="hidden" name="account_id" id="resetId">
             <div class="mb-3">
                 <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">New Password</label>
-                <input type="password" name="new_password" id="resetPass1" class="cyber-input" minlength="6" required placeholder="At least 6 characters">
+                <input type="password" name="new_password" id="resetPass1" class="cyber-input" minlength="8" required placeholder="At least 8 characters">
             </div>
             <div class="mb-4">
                 <label class="block text-[10px] text-[#666] uppercase tracking-wider mb-2">Confirm Password</label>
-                <input type="password" name="confirm_password" id="resetPass2" class="cyber-input" minlength="6" required placeholder="Repeat password">
+                <input type="password" name="confirm_password" id="resetPass2" class="cyber-input" minlength="8" required placeholder="Repeat password">
             </div>
             <p id="resetMatchMsg" class="hidden text-[#ef4444] text-[11px] mb-3">Passwords do not match.</p>
             <div class="flex justify-end gap-2">
@@ -759,6 +778,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
             <div class="flex flex-col gap-2">
                 <form method="POST">
                     <input type="hidden" name="action" value="delete_user">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                     <input type="hidden" name="mode" value="keep_data">
                     <input type="hidden" name="user_id" id="deleteKeepId">
                     <button type="submit" class="cyber-btn w-full justify-center">
@@ -767,6 +787,7 @@ logActivity('VIEW_MANAGE_USERS', 'Admin viewed user management page');
                 </form>
                 <form method="POST">
                     <input type="hidden" name="action" value="delete_user">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                     <input type="hidden" name="mode" value="all">
                     <input type="hidden" name="user_id" id="deleteAllId">
                     <button type="submit" class="cyber-btn-danger w-full justify-center">

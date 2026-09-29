@@ -65,6 +65,13 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 )");
 
+$conn->query("CREATE TABLE IF NOT EXISTS login_attempts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    attempted_at DATETIME NOT NULL,
+    KEY idx_ip_time (ip_address, attempted_at)
+)");
+
 $conn->query("CREATE TABLE IF NOT EXISTS remember_tokens (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_type ENUM('admin', 'technician', 'user') NOT NULL,
@@ -236,6 +243,14 @@ CREATE TABLE notifications (
 
 echo "Tables created.\n";
 
+// This is a development seeder: it DROPs and recreates the account tables, so
+// it deliberately leaves a known, trivial password behind so the demo data can
+// be logged into immediately. That is the opposite of what production wants,
+// which is why this file is CLI-only and gated behind SEED_ALLOW.
+//
+// database.sql and config/migrations/baseline_data.sql, the files a real
+// install uses, create their accounts with the LOCKED_PASSWORD_SENTINEL
+// sentinel instead. Do not copy these passwords into them.
 $adminPass = password_hash('admin123', PASSWORD_DEFAULT);
 $techPass = password_hash('tech123', PASSWORD_DEFAULT);
 $userPass = password_hash('user123', PASSWORD_DEFAULT);
@@ -252,9 +267,8 @@ foreach ($admins as $a) {
 echo "Admins inserted.\n";
 
 $users = [
-    ['Regular User',    'user@mcc.co.zw',       $userPass,  'Finance'],
-    ['Alice HR',        'alice@mcc.co.zw',      $userPass,  'HR'],
-    ['Bob Admin',       'bob@mcc.co.zw',        $userPass,  'Administration'],
+    ['Ian Smith',   'IanSmith@mcc.co.zw', $userPass, 'ICT'],
+    ['R. Dzanza',   'RDzanza@mcc.co.zw',  $userPass, 'ICT'],
 ];
 
 $stmt = $conn->prepare("INSERT INTO users (name, email, password, department) VALUES (?, ?, ?, ?)");
@@ -265,12 +279,15 @@ foreach ($users as $u) {
 echo "Users inserted.\n";
 
 // Technician IDs from auto-increment:
-// John Technician -> id=1, Mary Hardware -> id=2, Peter Network -> id=3, Sarah Software -> id=4
+// Jose -> 1, Abby -> 2, Tanya -> 3, Sean -> 4, Tanaka -> 5
+// 'general' is the catch-all specialization, so Sean must keep it or
+// hardware/software tickets have no eligible technician.
 $techs = [
-    ['John Technician', 'john.tech@mcc.co.zw', $techPass, 'general',  2, 'available', '+263712345678'],
-    ['Mary Hardware',   'mary.hardware@mcc.co.zw', $techPass, 'hardware', 1, 'available', '+263712345679'],
-    ['Peter Network',   'peter.network@mcc.co.zw', $techPass, 'network',  3, 'busy',      '+263712345680'],
-    ['Sarah Software',  'sarah.software@mcc.co.zw', $techPass, 'software', 0, 'available', '+263712345681'],
+    ['Jose Lambo',     'JoseLambo@mcc.co.zw', $techPass, 'network',  1, 'available', '+263712345678'],
+    ['Abby Chikore',   'AbbyC@mcc.co.zw',     $techPass, 'hardware', 0, 'available', '+263712345679'],
+    ['Tanya Sibanda',  'TanyaS@mcc.co.zw',    $techPass, 'software', 2, 'available', '+263712345680'],
+    ['Sean Moyo',      'SeanM@mcc.co.zw',     $techPass, 'general',  0, 'available', '+263712345681'],
+    ['Tanaka Kgosana', 'TanakaK@mcc.co.zw',   $techPass, 'network',  0, 'busy',      '+263712345682'],
 ];
 
 $stmt = $conn->prepare("INSERT INTO technicians (name, email, password, specialization, current_workload, status, phone) VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -280,7 +297,8 @@ foreach ($techs as $t) {
 }
 echo "Technicians inserted.\n";
 
-// Today's attendance: John(1), Mary(2), Sarah(4) on duty; Peter(3) has clocked out
+// Today's attendance: Jose(1), Abby(2), Sean(4) on duty; Tanya(3) has clocked
+// out. Tanaka(5) is off duty so he is not auto-assignable.
 $conn->query("INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
 (1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
 (2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
@@ -312,14 +330,15 @@ $conn->query("INSERT INTO assignment_rules (category, specialization, priority, 
 echo "Assignment rules inserted.\n";
 
 // Tickets - using correct user and technician IDs
-// Users: Regular User -> id=1, Alice HR -> id=2, Bob Admin -> id=3
-// Technicians: John -> 1, Mary -> 2, Peter -> 3, Sarah -> 4
+// Users: Ian -> 1, R. Dzanza -> 2  (there is no id 3)
+// Technicians: Jose -> 1, Abby -> 2, Tanya -> 3, Sean -> 4, Tanaka -> 5
+// Assignments follow specialization: network->1, software->3, general->4.
 $tickets = [
-    ['Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 3],
+    ['Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 1],
     ['Printer not working', 'The shared printer in the finance department is not printing documents. It shows offline status.', 'Finance', 'hardware', 'medium', 'open', 1, null],
-    ['Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 1],
-    ['Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 3, null],
-    ['Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 4],
+    ['Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 4],
+    ['Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 2, null],
+    ['Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 3],
     ['Computer running slow', 'My computer is extremely slow and takes a long time to open applications.', 'HR', 'hardware', 'medium', 'open', 2, null],
 ];
 
@@ -409,11 +428,11 @@ $conn->query("CREATE INDEX idx_system_logs_created_at ON system_logs(created_at)
 echo "Indexes created.\n\n";
 echo "===== LOGIN CREDENTIALS =====\n";
 echo "Admin:      admin@mcc.co.zw / admin123\n";
-echo "Technician: john.tech@mcc.co.zw / tech123\n";
-echo "            mary.hardware@mcc.co.zw / tech123\n";
-echo "            peter.network@mcc.co.zw / tech123\n";
-echo "            sarah.software@mcc.co.zw / tech123\n";
-echo "User:       user@mcc.co.zw / user123\n";
-echo "            alice@mcc.co.zw / user123\n";
-echo "            bob@mcc.co.zw / user123\n";
+echo "Technician: JoseLambo@mcc.co.zw / tech123\n";
+echo "            AbbyC@mcc.co.zw / tech123\n";
+echo "            TanyaS@mcc.co.zw / tech123\n";
+echo "            SeanM@mcc.co.zw / tech123\n";
+echo "            TanakaK@mcc.co.zw / tech123\n";
+echo "User:       IanSmith@mcc.co.zw / user123\n";
+echo "            RDzanza@mcc.co.zw / user123\n";
 echo "=============================\n";

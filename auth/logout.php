@@ -14,17 +14,21 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['user_role'])) {
 
 // Log logout activity if user is logged in
 if (isset($_SESSION['user_id'])) {
+    require_once '../config/auth_helper.php';
     require_once '../config/database.php';
     $database = new Database();
     $conn = $database->getConnection();
     
     $user_id = $_SESSION['user_id'];
-    $ip_address = $_SERVER['REMOTE_ADDR'];
-    $user_agent = $_SERVER['HTTP_USER_AGENT'];
-    
-    $log_query = "INSERT INTO system_logs (user_id, action, description, ip_address, user_agent) 
-                 VALUES ('$user_id', 'LOGOUT', 'User logged out from system', '$ip_address', '$user_agent')";
-    $conn->query($log_query);
+
+    $log_stmt = $conn->prepare(
+        "INSERT INTO system_logs
+            (user_id, action, description, ip_address, user_agent)
+         VALUES (?, 'LOGOUT', 'User logged out from system', ?, ?)"
+    );
+    $log_stmt->bind_param('iss', $user_id, clientIp(), clientUserAgent());
+    $log_stmt->execute();
+    $log_stmt->close();
 }
 
 // Destroy all session data

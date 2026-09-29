@@ -17,28 +17,41 @@ $conn = $database->getConnection();
 
 $reset = null;
 if (!empty($token)) {
-    $token_escaped = $conn->real_escape_string($token);
-    $result = $conn->query("SELECT id, user_type, user_id FROM password_resets 
-                            WHERE token = '$token_escaped' AND used = 0 AND expires_at > NOW() LIMIT 1");
+    // The table stores hash('sha256', $token), never the token itself, so a
+    // database read cannot be replayed to take over an account. sha256 is
+    // deterministic, so the digest is looked up directly and still uses the
+    // uq_token index; hash_equals then re-checks it in constant time.
+    $token_hash = hashBearerToken($token);
+    $stmt = $conn->prepare(
+        "SELECT id, user_type, user_id, token FROM password_resets
+         WHERE token = ? AND used = 0 AND expires_at > NOW() LIMIT 1"
+    );
+    $stmt->bind_param('s', $token_hash);
+    $stmt->execute();
+    $result = $stmt->get_result();
     if ($result && $result->num_rows == 1) {
-        $reset = $result->fetch_assoc();
-        $valid = true;
-        if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-            $new_password = isset($_POST['password']) ? $_POST['password'] : '';
-            $confirm_password = isset($_POST['confirm_password']) ? $_POST['confirm_password'] : '';
-            if (strlen($new_password) < 8) {
-                $errors[] = 'Password must be at least 8 characters';
-            } elseif ($new_password !== $confirm_password) {
-                $errors[] = 'Passwords do not match';
-            } else {
-                if (updateUserPassword($reset['user_type'], $reset['user_id'], $new_password)) {
-                    $conn->query("UPDATE password_resets SET used = 1 WHERE id = " . (int)$reset['id']);
-                    destroyRememberToken($reset['user_type'], $reset['user_id']);
-                    $_SESSION['success'] = 'Password reset successful. You can now login with your new password.';
-                    header('Location: login.php');
-                    exit();
+        $row = $result->fetch_assoc();
+        $stmt->close();
+        if (hash_equals($row['token'], $token_hash)) {
+            $reset = $row;
+            $valid = true;
+            if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+                $new_password = isset($_POST['password']) ? $_POST['password'] : '';
+                $confirm_password = isset($_POST['confirm_password']) ? $_POST['confirm_password'] : '';
+                if (strlen($new_password) < 8) {
+                    $errors[] = 'Password must be at least 8 characters';
+                } elseif ($new_password !== $confirm_password) {
+                    $errors[] = 'Passwords do not match';
                 } else {
-                    $errors[] = 'Failed to reset password. Please try again.';
+                    if (updateUserPassword($reset['user_type'], $reset['user_id'], $new_password)) {
+                        $conn->query("UPDATE password_resets SET used = 1 WHERE id = " . (int)$reset['id']);
+                        destroyRememberToken($reset['user_type'], $reset['user_id']);
+                        $_SESSION['success'] = 'Password reset successful. You can now login with your new password.';
+                        header('Location: login.php');
+                        exit();
+                    } else {
+                        $errors[] = 'Failed to reset password. Please try again.';
+                    }
                 }
             }
         }

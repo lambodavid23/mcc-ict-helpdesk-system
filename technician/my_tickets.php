@@ -27,6 +27,10 @@ $error = '';
 
 // Handle ticket updates
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
+    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        http_response_code(403);
+        $error = 'Invalid or expired form token. Please reload the page and try again.';
+    } else {
     switch ($_POST['action']) {
         case 'update_status':
             $ticket_id = $_POST['ticket_id'];
@@ -78,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
             }
             break;
     }
+    }
 }
 
 // Get filter parameters
@@ -123,6 +128,7 @@ logActivity('VIEW_MY_TICKETS', 'Technician viewed their tickets');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>My Tickets - MCC ICT Helpdesk</title>
     <link rel="stylesheet" href="../assets/fonts/fonts.css">
 <link rel="stylesheet" href="../assets/css/style.css">
@@ -259,6 +265,7 @@ logActivity('VIEW_MY_TICKETS', 'Technician viewed their tickets');
                                             <?php if ($ticket['status'] != 'resolved'): ?>
                                                 <form method="POST" action="" style="display: inline;">
                                                     <input type="hidden" name="action" value="update_status">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                                                     <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
                                                     <select name="new_status" class="form-select" style="width: auto; font-size: 0.75rem; padding: 0.25rem 0.5rem;">
                                                         <option value="">Update</option>
@@ -295,6 +302,7 @@ logActivity('VIEW_MY_TICKETS', 'Technician viewed their tickets');
             </div>
             <form method="POST" action="" id="solutionForm">
                 <input type="hidden" name="action" value="add_solution">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
                 <input type="hidden" id="solution_ticket_id" name="ticket_id">
                 <div class="form-group">
                     <label for="solution" class="form-label">Solution Description</label>
