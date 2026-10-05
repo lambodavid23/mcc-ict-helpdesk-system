@@ -22,6 +22,8 @@ desktop.ini
 
 # Local PHP / backups
 *.tmp
+backup*.sql
+dump*.sql
 # Local debug artifacts
 opencode-debug.txt
 
