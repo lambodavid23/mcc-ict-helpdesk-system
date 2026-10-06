@@ -92,7 +92,7 @@ new icon to a page, run `npm run build:icons` so it is included in the bundle.
 ├── tailwind.config.js        # Tailwind content globs
 ├── package.json              # Build scripts
 ├── index.php                 # Entry point
-├── database.sql              # Database schema and sample data
+├── database.sql              # Database schema and admin seed
 └── README.md                 # This file
 ```
 
@@ -123,30 +123,30 @@ new icon to a page, run `npm run build:icons` so it is included in the bundle.
    staff accounts, the auto-assignment rules, and the knowledge base articles
    the AI assistant relies on. It is safe to re-run and will not duplicate rows.
 
-> **The accounts these files create have no usable password.** They are
-> inserted with the sentinel value `!locked`, which is not a valid bcrypt
-> hash, so no login can match it. This is deliberate: these SQL files are in a
-> public repository, so an earlier version that seeded a default password made
-> the admin and all four technicians reachable by anyone who had read the
-> source. Set a real password from the command line before signing in:
+> **The only account these files create is the admin, and it has no usable
+> password.** It is inserted with the sentinel value `!locked`, which is not a
+> valid bcrypt hash, so no login can match it. This is deliberate: these SQL
+> files are in a public repository, so an earlier version that seeded a default
+> password made the admin reachable by anyone who had read the source. Set a
+> real password from the command line before signing in:
 
 > ```bash
 > # Create (or reset) the admin, printing a generated password once
 > php tools/create_admin.php
 >
-> # Set or reset any account, in any role table
-> php tools/set_password.php JoseLambo@mcc.co.zw
+> # Set or reset the admin password
+> php tools/set_password.php admin@mcc.co.zw
 > ```
 
 > Trying to log in before doing this returns an explicit message telling you
 > which command to run, rather than a generic failure.
 
 > **Never open `seed.php` in a browser.** It drops the core tables and
-> recreates them with demo data, destroying all tickets and accounts. It is now
+> recreates them, destroying all tickets and accounts. It is now
 > restricted to the command line and requires an explicit opt-in:
 > `set SEED_ALLOW=1 && php seed.php`
-> It is a *development* tool and its demo accounts use trivial passwords
-> (`admin123`, `tech123`, `user123`). Never use its output for anything real.
+> It is a *development* tool and the admin it creates uses a trivial password
+> (`admin123`). Never use its output for anything real.
 
 ### Step 3: Deploy Application
 1. Copy the entire project folder to `C:\xampp\htdocs\mcc-ict-helpdesk\`
@@ -169,31 +169,27 @@ new icon to a page, run `npm run build:icons` so it is included in the bundle.
 
 ## Accounts Created by the Installer
 
-These accounts are created by `config/migrations/baseline_data.sql` and by the
-sample data in `database.sql`. **None of them has a working password.** Each is
-inserted with the sentinel `!locked`, which no input can match, so there is no
-default credential sitting in a public repository waiting to be used.
+One account, `admin@mcc.co.zw`, inserted by `database.sql` and (guarded so it
+never duplicates) by `config/migrations/baseline_data.sql`. **It has no working
+password.** It is inserted with the sentinel `!locked`, which no input can
+match, so there is no default credential sitting in a public repository waiting
+to be used.
 
-Set a password for any of them from the command line:
+Set a password for it from the command line:
 
 ```bash
 php tools/create_admin.php                      # admin@mcc.co.zw, generated password
-php tools/set_password.php admin@mcc.co.zw      # or reset a specific account
-php tools/set_password.php JoseLambo@mcc.co.zw
+php tools/set_password.php admin@mcc.co.zw      # or reset it
 ```
 
-The password is printed once and stored only as a bcrypt hash. If you would
-rather not keep the seeded accounts at all, delete the rows and create exactly
-the staff you need with `tools/create_admin.php`.
+The password is printed once and stored only as a bcrypt hash.
 
-### Technician Accounts
-| Specialization | Email |
-| --- | --- |
-| Network | JoseLambo@mcc.co.zw |
-| Network | TanakaK@mcc.co.zw |
-| Hardware | AbbyC@mcc.co.zw |
-| Software | TanyaS@mcc.co.zw |
-| General | SeanM@mcc.co.zw |
+No users or technicians are seeded. Create them from the admin panel after
+signing in. `config/migrations/baseline_data.sql` also loads the assignment
+rules and the knowledge-base corpus that a fresh install needs.
+
+When you do add technicians, give each one a specialization (the admin panel
+field: network / hardware / software / general).
 
 `General` is the catch-all specialization: it matches any ticket category. Keep at
 least one general technician, otherwise hardware and software tickets have
@@ -202,12 +198,6 @@ nowhere to route.
 Specialization is set by hand in the admin panel — the system does not infer
 skill from ticket history. The resolution rate shown in Reports is display-only
 and does not affect routing.
-
-### User Accounts
-| Email | Department |
-| --- | --- |
-| IanSmith@mcc.co.zw | ICT |
-| RDzanza@mcc.co.zw | ICT |
 
 ## System Features in Detail
 
@@ -375,7 +365,7 @@ The system can be extended with:
 For technical support:
 1. Check this documentation
 2. Review error logs
-3. Test with demo accounts
+3. Reproduce the issue with a test account
 4. Verify database integrity
 
 ## License

@@ -241,92 +241,29 @@ CREATE TABLE system_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Sample accounts.
+-- The only account this file creates is the admin below. No sample users,
+-- technicians or tickets are seeded: a fresh install starts empty apart from
+-- this admin, and staff are added from the admin panel afterwards.
 --
--- These are created LOCKED, with the sentinel password '!locked' rather than a
--- real hash. '!locked' is not a valid bcrypt hash, so password_verify() rejects
--- every guess against it and nobody can sign in until a password is set. The
--- rows exist so the sample tickets below have an author and an assignee.
+-- It is created LOCKED, with the sentinel password '!locked' rather than a
+-- real hash. '!locked' is not a valid bcrypt hash, so password_verify()
+-- rejects every guess against it and nobody can sign in until a password is
+-- set.
 --
--- They used to carry the bcrypt hash of the literal string "password". This
--- file is in a public repository, so that made every one of these accounts,
--- including the admin, reachable by anyone who had read the source.
+-- It used to carry the bcrypt hash of the literal string "password". This
+-- file is in a public repository, so that made the account reachable by
+-- anyone who had read the source.
 --
--- After importing, set real passwords from the command line:
+-- Set a real password from the command line after importing:
 --   php tools/create_admin.php            (new admin, password generated)
---   php tools/set_password.php <email>    (set/reset any account's password)
+--   php tools/set_password.php admin@mcc.co.zw
 
--- ---------------------------------------------------------------- roster
--- Accounts are created LOCKED ('!locked' is not a valid bcrypt hash, so
--- password_verify rejects every guess). Set real passwords with:
---   php tools/create_admin.php            (new admin, password generated)
---   php tools/set_password.php <email>    (set/reset any account's password)
-
--- One admin
 INSERT INTO admins (name, email, password, department) VALUES
 ('System Administrator', 'admin@mcc.co.zw', '!locked', 'ICT');
 
--- Two users
-INSERT INTO users (name, email, password, department, status) VALUES
-('Ian Smith', 'IanSmith@mcc.co.zw', '!locked', 'ICT', 'active'),
-('R. Dzanza', 'RDzanza@mcc.co.zw', '!locked', 'ICT', 'active');
-
--- Five technicians.
--- specialization is MANUAL and admin-assigned (enum: network/hardware/
--- software/general); assignment matches on it plus current_workload.
--- 'general' is the catch-all that matches any category, so SeanM keeps that
--- one. Nothing infers skill from ticket history - reports.php computes a
--- resolution rate, but that number is display-only and never affects routing.
-INSERT INTO technicians (name, email, password, specialization, current_workload, status, phone, department) VALUES
-('Jose Lambo',     'JoseLambo@mcc.co.zw', '!locked', 'network',  1, 'available', '+263712345678', 'ICT'),
-('Abby Chikore',   'AbbyC@mcc.co.zw',     '!locked', 'hardware', 0, 'available', '+263712345679', 'ICT'),
-('Tanya Sibanda',  'TanyaS@mcc.co.zw',    '!locked', 'software', 2, 'available', '+263712345680', 'ICT'),
-('Sean Moyo',      'SeanM@mcc.co.zw',     '!locked', 'general',  0, 'available', '+263712345681', 'ICT'),
-('Tanaka Kgosana', 'TanakaK@mcc.co.zw',   '!locked', 'network',  0, 'busy',      '+263712345682', 'ICT');
-
--- Insert sample attendance for today (on-duty technicians eligible for assignment).
--- TanakaK (id 5) is deliberately off duty so he is not auto-assignable.
-INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
-(1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
-(2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
-(3, CURDATE(), NOW() - INTERVAL 7 HOUR, NOW() - INTERVAL 1 HOUR),
-(4, CURDATE(), NOW() - INTERVAL 4 HOUR, NULL);
-
--- Insert sample tickets
--- created_by: 1 = Ian Smith, 2 = R. Dzanza
--- assigned_to: 1 = Jose (network), 3 = Tanya (software), 4 = Sean (general)
-INSERT INTO tickets (title, description, department, category, priority, status, created_by, assigned_to) VALUES
-('Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 1),
-('Printer not working', 'The shared printer in the finance department is not printing documents. It shows offline status.', 'Finance', 'hardware', 'medium', 'open', 1, NULL),
-('Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 4),
-('Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 2, NULL),
-('Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 3),
-('Computer running slow', 'My computer is extremely slow and takes a long time to open applications.', 'HR', 'hardware', 'medium', 'open', 2, NULL);
-
--- Insert sample ticket assignments
-INSERT INTO ticket_assignments (ticket_id, technician_id, status, notes) VALUES
-(1, 1, 'active', 'Working on network configuration issue'),
-(3, 4, 'completed', 'Password reset successfully'),
-(5, 3, 'active', 'Investigating email server settings');
-
--- Insert sample fault history
-INSERT INTO fault_history (ticket_id, problem, solution, resolved_by, resolved_at, time_to_resolve) VALUES
-(3, 'User account locked due to failed login attempts', 'Reset user password and unlocked account. Provided training on proper password management.', 4, '2024-01-15 14:30:00', 45);
-
--- Insert sample knowledge base
-INSERT INTO knowledge_base (issue_keyword, category, recommended_solution, usage_count) VALUES
-('cannot connect to network', 'network', '1. Check if network cable is properly connected\n2. Restart your computer\n3. Try connecting to a different network port\n4. Contact IT if issue persists', 15),
-('printer not working', 'hardware', '1. Check if printer is turned on and connected\n2. Clear print queue\n3. Restart printer\n4. Update printer drivers\n5. Check paper and ink levels', 12),
-('account locked', 'login', '1. Wait 15 minutes for automatic unlock\n2. Contact IT department for password reset\n3. Use password reset link if available\n4. Verify correct email/username', 8),
-('software installation', 'software', '1. Ensure you have admin rights\n2. Disable antivirus temporarily\n3. Clear temporary files\n4. Download fresh installation files\n5. Run installer as administrator', 10),
-('computer slow', 'hardware', '1. Restart your computer\n2. Clear browser cache and temporary files\n3. Check disk space\n4. Run virus scan\n5. Consider hardware upgrade if issue persists', 20);
-
--- Insert sample system logs
-INSERT INTO system_logs (user_id, user_type, action, description, ip_address) VALUES
-(1, 'admin', 'LOGIN', 'Admin logged into system', '192.168.1.100'),
-(1, 'technician', 'TICKET_ASSIGNED', 'Jose assigned to ticket #1', '192.168.1.101'),
-(1, 'user', 'TICKET_CREATED', 'User created new ticket', '192.168.1.102'),
-(2, 'technician', 'TICKET_RESOLVED', 'Sean resolved account lockout', '192.168.1.103');
+-- Knowledge base, ticket data and staff are NOT seeded here. The knowledge-base
+-- corpus lives in config/migrations/baseline_data.sql; run it after importing
+-- this file if you want the AI assistant to have articles to retrieve.
 
 -- Create indexes for better performance
 CREATE INDEX idx_tickets_status ON tickets(status);

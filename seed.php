@@ -2,9 +2,14 @@
 /**
  * DESTRUCTIVE development seeder.
  *
- * This file DROPs the core tables and recreates them with demo data, which
- * destroys all live tickets, staff accounts and resolutions. It must never be
- * reachable from a browser.
+ * This file DROPs the core tables and recreates them empty apart from a single
+ * admin account, which destroys all live tickets, staff accounts and
+ * resolutions. It must never be reachable from a browser.
+ *
+ * No sample users, technicians or tickets are created: the database comes back
+ * up with one admin, the assignment rules and an empty knowledge base. Add
+ * staff from the admin panel, and load the knowledge-base corpus with
+ * config/migrations/baseline_data.sql if you want it.
  *
  * Run it from the command line only:
  *   php seed.php
@@ -243,17 +248,15 @@ CREATE TABLE notifications (
 
 echo "Tables created.\n";
 
-// This is a development seeder: it DROPs and recreates the account tables, so
-// it deliberately leaves a known, trivial password behind so the demo data can
-// be logged into immediately. That is the opposite of what production wants,
+// This is a development seeder: it DROPs and recreates the account table, so
+// it deliberately leaves a known, trivial password behind so the admin can be
+// logged into immediately. That is the opposite of what production wants,
 // which is why this file is CLI-only and gated behind SEED_ALLOW.
 //
 // database.sql and config/migrations/baseline_data.sql, the files a real
 // install uses, create their accounts with the LOCKED_PASSWORD_SENTINEL
-// sentinel instead. Do not copy these passwords into them.
+// sentinel instead. Do not copy this password into them.
 $adminPass = password_hash('admin123', PASSWORD_DEFAULT);
-$techPass = password_hash('tech123', PASSWORD_DEFAULT);
-$userPass = password_hash('user123', PASSWORD_DEFAULT);
 
 $admins = [
     ['Admin User', 'admin@mcc.co.zw', $adminPass, 'ICT'],
@@ -265,46 +268,6 @@ foreach ($admins as $a) {
     $stmt->execute();
 }
 echo "Admins inserted.\n";
-
-$users = [
-    ['Ian Smith',   'IanSmith@mcc.co.zw', $userPass, 'ICT'],
-    ['R. Dzanza',   'RDzanza@mcc.co.zw',  $userPass, 'ICT'],
-];
-
-$stmt = $conn->prepare("INSERT INTO users (name, email, password, department) VALUES (?, ?, ?, ?)");
-foreach ($users as $u) {
-    $stmt->bind_param("ssss", $u[0], $u[1], $u[2], $u[3]);
-    $stmt->execute();
-}
-echo "Users inserted.\n";
-
-// Technician IDs from auto-increment:
-// Jose -> 1, Abby -> 2, Tanya -> 3, Sean -> 4, Tanaka -> 5
-// 'general' is the catch-all specialization, so Sean must keep it or
-// hardware/software tickets have no eligible technician.
-$techs = [
-    ['Jose Lambo',     'JoseLambo@mcc.co.zw', $techPass, 'network',  1, 'available', '+263712345678'],
-    ['Abby Chikore',   'AbbyC@mcc.co.zw',     $techPass, 'hardware', 0, 'available', '+263712345679'],
-    ['Tanya Sibanda',  'TanyaS@mcc.co.zw',    $techPass, 'software', 2, 'available', '+263712345680'],
-    ['Sean Moyo',      'SeanM@mcc.co.zw',     $techPass, 'general',  0, 'available', '+263712345681'],
-    ['Tanaka Kgosana', 'TanakaK@mcc.co.zw',   $techPass, 'network',  0, 'busy',      '+263712345682'],
-];
-
-$stmt = $conn->prepare("INSERT INTO technicians (name, email, password, specialization, current_workload, status, phone) VALUES (?, ?, ?, ?, ?, ?, ?)");
-foreach ($techs as $t) {
-    $stmt->bind_param("ssssiss", $t[0], $t[1], $t[2], $t[3], $t[4], $t[5], $t[6]);
-    $stmt->execute();
-}
-echo "Technicians inserted.\n";
-
-// Today's attendance: Jose(1), Abby(2), Sean(4) on duty; Tanya(3) has clocked
-// out. Tanaka(5) is off duty so he is not auto-assignable.
-$conn->query("INSERT INTO technician_attendance (technician_id, work_date, clock_in, clock_out) VALUES
-(1, CURDATE(), NOW() - INTERVAL 5 HOUR, NULL),
-(2, CURDATE(), NOW() - INTERVAL 6 HOUR, NULL),
-(3, CURDATE(), NOW() - INTERVAL 7 HOUR, NOW() - INTERVAL 1 HOUR),
-(4, CURDATE(), NOW() - INTERVAL 4 HOUR, NULL)");
-echo "Technician attendance inserted.\n";
 
 // Assignment rules (technician_id NULL = auto-pick by specialization)
 $conn->query("CREATE TABLE IF NOT EXISTS assignment_rules (
@@ -329,86 +292,11 @@ $conn->query("INSERT INTO assignment_rules (category, specialization, priority, 
 ('general', 'general', 'any', NULL, 1, 20, 1)");
 echo "Assignment rules inserted.\n";
 
-// Tickets - using correct user and technician IDs
-// Users: Ian -> 1, R. Dzanza -> 2  (there is no id 3)
-// Technicians: Jose -> 1, Abby -> 2, Tanya -> 3, Sean -> 4, Tanaka -> 5
-// Assignments follow specialization: network->1, software->3, general->4.
-$tickets = [
-    ['Cannot connect to network', 'My computer cannot connect to the office network. I have tried restarting the router but still no connection.', 'Finance', 'network', 'high', 'in_progress', 1, 1],
-    ['Printer not working', 'The shared printer in the finance department is not printing documents. It shows offline status.', 'Finance', 'hardware', 'medium', 'open', 1, null],
-    ['Login account locked', 'My account has been locked after multiple failed login attempts. Please help me reset my password.', 'HR', 'login', 'medium', 'resolved', 2, 4],
-    ['Software installation issue', 'I need Microsoft Office installed on my new computer. The installation keeps failing.', 'Administration', 'software', 'low', 'open', 2, null],
-    ['Email not sending', 'I can receive emails but cannot send any emails. Getting an error message about SMTP server.', 'Finance', 'software', 'high', 'in_progress', 1, 3],
-    ['Computer running slow', 'My computer is extremely slow and takes a long time to open applications.', 'HR', 'hardware', 'medium', 'open', 2, null],
-];
-
-$stmt = $conn->prepare("INSERT INTO tickets (title, description, department, category, priority, status, created_by, assigned_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-foreach ($tickets as $t) {
-    $stmt->bind_param("ssssssii", $t[0], $t[1], $t[2], $t[3], $t[4], $t[5], $t[6], $t[7]);
-    $stmt->execute();
-}
-echo "Tickets inserted.\n";
-
-// Ticket assignments (ticket_id, technician_id)
-$assignments = [
-    [1, 3, 'active', 'Working on network configuration issue'],
-    [3, 1, 'completed', 'Password reset successfully'],
-    [5, 4, 'active', 'Investigating email server settings'],
-];
-
-$stmt = $conn->prepare("INSERT INTO ticket_assignments (ticket_id, technician_id, status, notes) VALUES (?, ?, ?, ?)");
-foreach ($assignments as $a) {
-    $stmt->bind_param("iiss", $a[0], $a[1], $a[2], $a[3]);
-    $stmt->execute();
-}
-echo "Ticket assignments inserted.\n";
-
-// Fault history
-$conn->query("INSERT INTO fault_history (ticket_id, problem, solution, resolved_by, resolved_at, time_to_resolve) VALUES (3, 'User account locked due to failed login attempts', 'Reset user password and unlocked account. Provided training on proper password management.', 1, '2024-01-15 14:30:00', 45)");
-echo "Fault history inserted.\n";
-
-// Knowledge base
-$kbArticles = [
-    ['cannot connect to network', 'network', "1. Check if network cable is properly connected\n2. Restart your computer\n3. Try connecting to a different network port\n4. Contact IT if issue persists", 15],
-    ['printer not working', 'hardware', "1. Check if printer is turned on and connected\n2. Clear print queue\n3. Restart printer\n4. Update printer drivers\n5. Check paper and ink levels", 12],
-    ['account locked', 'login', "1. Wait 15 minutes for automatic unlock\n2. Contact IT department for password reset\n3. Use password reset link if available\n4. Verify correct email/username", 8],
-    ['software installation', 'software', "1. Ensure you have admin rights\n2. Disable antivirus temporarily\n3. Clear temporary files\n4. Download fresh installation files\n5. Run installer as administrator", 10],
-    ['computer slow', 'hardware', "1. Restart your computer\n2. Clear browser cache and temporary files\n3. Check disk space\n4. Run virus scan\n5. Consider hardware upgrade if issue persists", 20],
-];
-
-$stmt = $conn->prepare("INSERT INTO knowledge_base (issue_keyword, category, recommended_solution, usage_count) VALUES (?, ?, ?, ?)");
-foreach ($kbArticles as $k) {
-    $stmt->bind_param("sssi", $k[0], $k[1], $k[2], $k[3]);
-    $stmt->execute();
-}
-echo "Knowledge base inserted.\n";
-
-// Sample ticket comment (ticket 1, user 1)
-$stmt = $conn->prepare("INSERT INTO ticket_comments (ticket_id, user_id, user_type, comment, is_internal) VALUES (?, ?, ?, ?, ?)");
-$stmt->bind_param("iissi", $ticketId, $userId, $userType, $commentText, $isInternal);
-foreach ([
-    [1, 1, 'user', 'Please keep me updated on the progress. My department needs the network urgently.', 0],
-    [1, 3, 'technician', 'Testing a different network port and checking switch configuration.', 1],
-] as $c) {
-    $ticketId = $c[0]; $userId = $c[1]; $userType = $c[2]; $commentText = $c[3]; $isInternal = $c[4];
-    $stmt->execute();
-}
-echo "Sample comments inserted.\n";
-
-// System logs
-$logs = [
-    [1, 'admin', 'LOGIN', 'Admin logged into system', '192.168.1.100'],
-    [1, 'technician', 'TICKET_ASSIGNED', 'John assigned to ticket #1', '192.168.1.101'],
-    [1, 'user', 'TICKET_CREATED', 'User created new ticket', '192.168.1.102'],
-    [2, 'technician', 'TICKET_RESOLVED', 'Mary resolved hardware issue', '192.168.1.103'],
-];
-
-$stmt = $conn->prepare("INSERT INTO system_logs (user_id, user_type, action, description, ip_address) VALUES (?, ?, ?, ?, ?)");
-foreach ($logs as $l) {
-    $stmt->bind_param("issss", $l[0], $l[1], $l[2], $l[3], $l[4]);
-    $stmt->execute();
-}
-echo "System logs inserted.\n";
+// Knowledge base corpus is deliberately not seeded: knowledge_base was just
+// recreated empty above. Load the articles with the guarded, re-runnable
+// config/migrations/baseline_data.sql, which also tops up the admin and the
+// assignment rules without duplicating them.
+echo "Knowledge base left empty - run config/migrations/baseline_data.sql for the corpus.\n";
 
 // Indexes
 $conn->query("CREATE INDEX idx_tickets_status ON tickets(status)");
@@ -428,11 +316,5 @@ $conn->query("CREATE INDEX idx_system_logs_created_at ON system_logs(created_at)
 echo "Indexes created.\n\n";
 echo "===== LOGIN CREDENTIALS =====\n";
 echo "Admin:      admin@mcc.co.zw / admin123\n";
-echo "Technician: JoseLambo@mcc.co.zw / tech123\n";
-echo "            AbbyC@mcc.co.zw / tech123\n";
-echo "            TanyaS@mcc.co.zw / tech123\n";
-echo "            SeanM@mcc.co.zw / tech123\n";
-echo "            TanakaK@mcc.co.zw / tech123\n";
-echo "User:       IanSmith@mcc.co.zw / user123\n";
-echo "            RDzanza@mcc.co.zw / user123\n";
+echo "Users, technicians and tickets: none - add them from the admin panel.\n";
 echo "=============================\n";

@@ -6,7 +6,7 @@
  * sentinel, and to recover access when the only admin password is lost.
  *
  *   php tools/set_password.php admin@mcc.co.zw
- *   php tools/set_password.php JoseLambo@mcc.co.zw --password="correct horse"
+ *   php tools/set_password.php someone@mcc.co.zw --password="correct horse"
  *
  * With no --password a strong one is generated and printed. Command-line only.
  */

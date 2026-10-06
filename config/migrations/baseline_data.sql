@@ -7,54 +7,34 @@
 --
 -- ACCOUNTS ARE CREATED LOCKED, NOT WITH A DEFAULT PASSWORD.
 --
--- Every account below is inserted with the sentinel password below, which
--- cannot be matched by any input: it is not a valid bcrypt hash, so
--- password_verify() rejects every guess against it. The accounts exist so the
--- assignment rules and knowledge base have rows to reference, but nobody can
--- sign in as them until a real password is set.
+-- The only account inserted here is the admin below, carrying the sentinel
+-- password '!locked', which cannot be matched by any input: it is not a valid
+-- bcrypt hash, so password_verify() rejects every guess against it. Nobody can
+-- sign in until a real password is set.
 --
--- This is deliberate. These rows used to carry the bcrypt hash of the literal
--- string "password", and the repository is public, so the admin and all four
--- technicians were reachable by anyone who had read the file. There is no
--- value in a default password that is also public.
+-- This is deliberate. This row used to carry the bcrypt hash of the literal
+-- string "password", and the repository is public, so the admin was reachable
+-- by anyone who had read the file. There is no value in a default password
+-- that is also public.
 --
--- ROSTER: one admin, five technicians, two users. Specialization is a MANUAL
--- admin-assigned field (enum: network/hardware/software/general). Assignment is
--- driven by it, plus current_workload. 'general' is the catch-all that matches
--- any category, so at least one general technician should exist. Nothing here
--- infers skill from ticket history - reports.php shows a resolution rate, but
--- that number is display-only and never feeds back into assignment.
+-- ROSTER: one admin. No sample users or technicians are seeded - a fresh
+-- install starts empty apart from this admin, and staff are created from the
+-- admin panel. Specialization is a MANUAL admin-assigned field (enum:
+-- network/hardware/software/general). Assignment is driven by it, plus
+-- current_workload. 'general' is the catch-all that matches any category, so
+-- at least one general technician should exist once you add staff. Nothing
+-- here infers skill from ticket history - reports.php shows a resolution rate,
+-- but that number is display-only and never feeds back into assignment.
 --
--- After importing, set real passwords from the command line:
+-- After importing, set a real password from the command line:
 --
---   php tools/create_admin.php            (new admin, password generated)
---   php tools/set_password.php <email>    (set/reset any account's password)
+--   php tools/create_admin.php                 (new admin, password generated)
+--   php tools/set_password.php admin@mcc.co.zw (set/reset the admin password)
 --
 -- ---------------------------------------------------------------- admins
 INSERT INTO admins (name, email, password, department)
 SELECT 'System Administrator', 'admin@mcc.co.zw', '!locked', 'ICT'
 WHERE NOT EXISTS (SELECT 1 FROM admins WHERE email = 'admin@mcc.co.zw');
-
--- ---------------------------------------------------------------- users
-INSERT INTO users (name, email, password, department, status)
-SELECT v.name, v.email, '!locked', v.department, 'active'
-FROM (
-    SELECT 'Ian Smith'  AS name, 'IanSmith@mcc.co.zw' AS email, 'ICT' AS department
-    UNION ALL SELECT 'R. Dzanza', 'RDzanza@mcc.co.zw', 'ICT'
-) v
-WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.email = v.email);
-
--- ---------------------------------------------------------------- technicians
-INSERT INTO technicians (name, email, password, specialization, current_workload, status, phone, department)
-SELECT v.name, v.email, '!locked', v.specialization, 0, 'available', v.phone, 'ICT'
-FROM (
-    SELECT 'Jose Lambo'    AS name, 'JoseLambo@mcc.co.zw' AS email, 'network'  AS specialization, '+263712345678' AS phone
-    UNION ALL SELECT 'Abby Chikore',  'AbbyC@mcc.co.zw',     'hardware', '+263712345679'
-    UNION ALL SELECT 'Tanya Sibanda', 'TanyaS@mcc.co.zw',    'software', '+263712345680'
-    UNION ALL SELECT 'Sean Moyo',     'SeanM@mcc.co.zw',     'general',  '+263712345681'
-    UNION ALL SELECT 'Tanaka Kgosana','TanakaK@mcc.co.zw',   'network',  '+263712345682'
-) v
-WHERE NOT EXISTS (SELECT 1 FROM technicians t WHERE t.email = v.email);
 
 -- ---------------------------------------------------------------- auto-assign rules
 -- Required for automatic technician assignment; without these, tickets are
