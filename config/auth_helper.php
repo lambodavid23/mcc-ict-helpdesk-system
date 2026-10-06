@@ -303,7 +303,9 @@ function rememberCookieOptions() {
 }
 
 function clearRememberCookie() {
-    setcookie('remember_token', '', time() - 3600, rememberCookieOptions());
+    $opts = rememberCookieOptions();
+    $opts['expires'] = time() - 3600;
+    setcookie('remember_token', '', $opts);
 }
 
 /**
@@ -332,10 +334,11 @@ function issueRememberToken($role, $userId) {
     $stmt->execute();
     $stmt->close();
     $opts = rememberCookieOptions();
-    // Pass the options ARRAY, not the positional form. The positional overload
-    // has no samesite argument, so calling it this way silently discarded the
-    // SameSite=Lax that rememberCookieOptions() had already computed.
-    setcookie('remember_token', $token, time() + 30 * 24 * 3600, $opts);
+    $opts['expires'] = time() + 30 * 24 * 3600;
+    // Pass the options ARRAY as the 3rd argument. The positional overload
+    // has no samesite argument, and putting the array in the 4th slot makes
+    // PHP read it as $path (TypeError) and silently drop SameSite=Lax.
+    setcookie('remember_token', $token, $opts);
 }
 
 /**
